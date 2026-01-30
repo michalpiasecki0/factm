@@ -1,0 +1,31 @@
+[project]
+name = "factm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.4.1",
+    "scikit-learn>=1.8.0",
+    "scipy>=1.17.0",
+]
+
+[dependency-groups]
+dev = [
+    "black>=26.1.0",
+    "mypy>=1.19.1",
+    "pre-commit>=4.5.1",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.14",
+]
+
+[tool.black]
+line-length = 88
+
+[tool.ruff]
+select = ["E", "F", "I", "B"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
