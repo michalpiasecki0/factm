@@ -2,6 +2,9 @@
 This module provides Correlated Topic Model model with all the nodes.
 """
 
+from dataclasses import dataclass
+from typing import List
+
 import numpy as np
 from scipy.optimize import minimize
 from scipy.special import digamma, gammaln
@@ -10,28 +13,26 @@ from utils import log_eps
 EPS = 1e-20
 
 
-class nodeCTM_general:
-    """
-    Class to store const. of a CTM model.
-    """
+@dataclass
+class CTMParams:
+    """Shared parameters for Correlated Topic Model."""
 
-    def __init__(self, N, L, G, I_per_n, J_per_n, maskNA_N, maskNA_N_L):
-        self.L = L
-        self.N = N
-        self.G = G
-        self.I_per_n = I_per_n
-        self.J_per_n = J_per_n
-        self.maskNA_N = maskNA_N
-        self.maskNA_N_L = maskNA_N_L
+    N: int
+    L: int
+    G: int
+    I_per_n: List[int]
+    J_per_n: List[int]
+    maskNA_N: List[bool]
+    maskNA_N_L: np.ndarray
 
 
-class nodeCTM_Sigma0(nodeCTM_general):
+class nodeCTM_Sigma0:
     """
     Class to define Sigma0 node (L times L).
     """
 
-    def __init__(self, Sigma0, general_params):
-        super().__init__(**general_params)
+    def __init__(self, Sigma0, params: CTMParams):
+        self.params = params
 
         self.Sigma0 = Sigma0
 
@@ -49,12 +50,13 @@ class nodeCTM_Sigma0(nodeCTM_general):
         # Below we compute: diag(Cov(\sum_k z_nk w_.k, \sum_k' z_nk' w_.k'))
         # for l!= l' Cov(w_lk, w_l'k), so just diag needed
         Ez2w2 = np.sum(
-            np.dot(self.w_z_node.E_z_squared, self.w_z_node.E_w_squared.T), axis=0
+            np.dot(self.w_z_node.E_z_squared, self.w_z_node.E_w_squared.T),
+            axis=0,
         )
         Ezw_2 = np.sum(np.dot(self.w_z_node.E_z**2, self.w_z_node.E_w.T**2), axis=0)
         cov_sumk_znk_wk = Ez2w2 - Ezw_2
 
-        n = self.N - np.sum(self.maskNA_N)
+        n = self.params.N - np.sum(self.params.maskNA_N)
 
         self.Sigma0 = (
             np.dot(centered_mean.T, centered_mean) / n
@@ -66,13 +68,13 @@ class nodeCTM_Sigma0(nodeCTM_general):
         self.det_Sigma0 = np.linalg.det(self.Sigma0)
 
 
-class nodeCTM_mu0(nodeCTM_general):
+class nodeCTM_mu0:
     """
     Class to define mu0 node (length L).
     """
 
-    def __init__(self, mu0, general_params):
-        super().__init__(**general_params)
+    def __init__(self, mu0, params: CTMParams):
+        self.params = params
 
         self.mu0 = mu0
 
@@ -84,13 +86,13 @@ class nodeCTM_mu0(nodeCTM_general):
         self.mu0 = np.mean(self.eta_node.vi_mu - self.w_z_node.E_w_z, axis=0)
 
 
-class nodeCTM_w_z(nodeCTM_general):
+class nodeCTM_w_z:
     """
     Class to store variational params from FA part of FACTM.
     """
 
-    def __init__(self, E_w, E_w_squared, E_z, E_z_squared, general_params):
-        super().__init__(**general_params)
+    def __init__(self, E_w, E_w_squared, E_z, E_z_squared, params: CTMParams):
+        self.params = params
 
         self.E_w = E_w
         self.E_w_squared = E_w_squared
@@ -111,13 +113,13 @@ class nodeCTM_w_z(nodeCTM_general):
         pass
 
 
-class nodeCTM_eta(nodeCTM_general):
+class nodeCTM_eta:
     """
     Class to define eta node (N times L).
     """
 
-    def __init__(self, vi_mu, vi_var, vi_zeta, general_params):
-        super().__init__(**general_params)
+    def __init__(self, vi_mu, vi_var, vi_zeta, params: CTMParams):
+        self.params = params
 
         self.vi_mu = vi_mu
         self.vi_var = vi_var
@@ -135,8 +137,8 @@ class nodeCTM_eta(nodeCTM_general):
         self.xi_node = xi_node
 
     def update(self):
-        for n in range(self.N):
-            if not self.maskNA_N[n]:
+        for n in range(self.params.N):
+            if not self.params.maskNA_N[n]:
                 self.vi_zeta[n] = np.sum(self.E_exp_eta[n, :])
 
                 E_w_z_n = self.w_z_node.E_w_z[n, :]
@@ -144,7 +146,7 @@ class nodeCTM_eta(nodeCTM_general):
                 Sigma_inv = self.Sigma0_node.inv_Sigma0
                 vi_xi_par_n = self.xi_node.vi_par[n]
                 vi_zeta_n = self.vi_zeta[n]
-                I_n = self.I_per_n[n]
+                I_n = self.params.I_per_n[n]
 
                 def f(
                     x,
@@ -156,8 +158,8 @@ class nodeCTM_eta(nodeCTM_general):
                     I_n=I_n,
                 ):
                     return -self.__f_eta_par_n(
-                        x[: self.L],
-                        x[self.L :],
+                        x[: self.params.L],
+                        x[self.params.L :],
                         E_w_z_n,
                         mu0,
                         Sigma_inv,
@@ -176,8 +178,8 @@ class nodeCTM_eta(nodeCTM_general):
                     I_n=I_n,
                 ):
                     return -self.__fgrad_eta_par_n(
-                        x[: self.L],
-                        x[self.L :],
+                        x[: self.params.L],
+                        x[self.params.L :],
                         E_w_z_n,
                         mu0,
                         Sigma_inv,
@@ -193,8 +195,8 @@ class nodeCTM_eta(nodeCTM_general):
                 # a condition that variances are non-negative
                 bnds = tuple(
                     map(
-                        lambda x: (-1e1, 1e1) if x < self.L else (EPS, 1e1),
-                        range(2 * self.L),
+                        lambda x: (-1e1, 1e1) if x < self.params.L else (EPS, 1e1),
+                        range(2 * self.params.L),
                     )
                 )
 
@@ -207,34 +209,35 @@ class nodeCTM_eta(nodeCTM_general):
                     bounds=bnds,
                 )
 
-                self.vi_mu[n, :] = result.x[: self.L]
-                self.vi_var[n, :] = result.x[self.L :]
+                self.vi_mu[n, :] = result.x[: self.params.L]
+                self.vi_var[n, :] = result.x[self.params.L :]
 
                 self.E_exp_eta[n, :] = np.exp(self.vi_mu[n, :] + self.vi_var[n, :] / 2)
             self.E_eta_minus_mu0 = self.vi_mu - self.mu0_node.mu0
 
-            self.vi_mu = np.ma.array(self.vi_mu, mask=self.maskNA_N_L)
-            self.vi_var = np.ma.array(self.vi_var, mask=self.maskNA_N_L)
-            self.E_exp_eta = np.ma.array(self.E_exp_eta, mask=self.maskNA_N_L)
+            self.vi_mu = np.ma.array(self.vi_mu, mask=self.params.maskNA_N_L)
+            self.vi_var = np.ma.array(self.vi_var, mask=self.params.maskNA_N_L)
+            self.E_exp_eta = np.ma.array(self.E_exp_eta, mask=self.params.maskNA_N_L)
             self.E_eta_minus_mu0 = np.ma.array(
-                self.E_eta_minus_mu0, mask=self.maskNA_N_L
+                self.E_eta_minus_mu0, mask=self.params.maskNA_N_L
             )
 
     def ELBO(self):
-        elbo = np.sum(np.log(self.vi_var)) / 2 + np.sum(~self.maskNA_N_L) / 2
+        elbo = np.sum(np.log(self.vi_var)) / 2 + np.sum(~self.params.maskNA_N_L) / 2
 
         centered_mean = self.vi_mu - self.w_z_node.E_w_z - self.mu0_node.mu0
 
         # Below we compute: diag(Cov(\sum_k z_nk w_.k, \sum_k' z_nk' w_.k'))
         # for l!= l' Cov(w_lk, w_l'k), so just diag needed
         Ez2w2 = np.sum(
-            np.dot(self.w_z_node.E_z_squared, self.w_z_node.E_w_squared.T), axis=0
+            np.dot(self.w_z_node.E_z_squared, self.w_z_node.E_w_squared.T),
+            axis=0,
         )
         Ezw_2 = np.sum(np.dot(self.w_z_node.E_z**2, self.w_z_node.E_w.T**2), axis=0)
         cov_sum_znk_wk = Ez2w2 - Ezw_2
 
         elbo += (
-            -self.N * np.log(self.Sigma0_node.det_Sigma0) / 2
+            -self.params.N * np.log(self.Sigma0_node.det_Sigma0) / 2
             - np.sum(np.diag(self.Sigma0_node.inv_Sigma0) * self.vi_var) / 2
             - np.sum(centered_mean * np.dot(centered_mean, self.Sigma0_node.inv_Sigma0))
             / 2
@@ -293,17 +296,17 @@ class nodeCTM_eta(nodeCTM_general):
         return grad
 
 
-class nodeCTM_xi(nodeCTM_general):
+class nodeCTM_xi:
     """
     Class to define xi node (a list of N elements: I_n times L).
     """
 
-    def __init__(self, vi_par, general_params):
-        super().__init__(**general_params)
+    def __init__(self, vi_par, params: CTMParams):
+        self.params = params
 
         self.vi_par = vi_par
 
-        self.vi_log_par = [log_eps(vi_par[i]) for i in range(self.N)]
+        self.vi_log_par = [log_eps(vi_par[i]) for i in range(self.params.N)]
 
         self.elbo = 0
 
@@ -317,20 +320,22 @@ class nodeCTM_xi(nodeCTM_general):
             self.beta_node.digamma_vi_alpha.T - self.beta_node.digamma_sum_vi_alpha
         )
 
-        for n in range(self.N):
-            if not self.maskNA_N[n]:
-                vi_par_n = np.zeros((self.I_per_n[n], self.L))
-                vi_log_par_n = np.zeros((self.I_per_n[n], self.L))
+        for n in range(self.params.N):
+            if not self.params.maskNA_N[n]:
+                vi_par_n = np.zeros((self.params.I_per_n[n], self.params.L))
+                vi_log_par_n = np.zeros((self.params.I_per_n[n], self.params.L))
 
                 vi_log_par_n = self.eta_node.vi_mu[n, :] + np.dot(
                     self.y_node.data[n], term_E_log_beta
                 )
                 vi_log_par_n = vi_log_par_n - np.outer(
-                    np.max(vi_log_par_n, axis=1), np.ones(self.L)
+                    np.max(vi_log_par_n, axis=1), np.ones(self.params.L)
                 )
                 vi_par_n = np.exp(vi_log_par_n)
 
-                norm_cons_tmp = np.outer(np.sum(vi_par_n, axis=1), np.ones(self.L))
+                norm_cons_tmp = np.outer(
+                    np.sum(vi_par_n, axis=1), np.ones(self.params.L)
+                )
                 vi_par_n = vi_par_n / norm_cons_tmp
                 vi_log_par_n = vi_log_par_n - log_eps(norm_cons_tmp)
 
@@ -340,12 +345,12 @@ class nodeCTM_xi(nodeCTM_general):
     def ELBO(self):
         kl = 0
         entropy = 0
-        for n in range(self.N):
-            if not self.maskNA_N[n]:
+        for n in range(self.params.N):
+            if not self.params.maskNA_N[n]:
                 entropy += -np.sum(self.vi_par[n] * self.vi_log_par[n])
-                kl += np.sum(self.eta_node.vi_mu[n, :] * self.vi_par[n]) - self.I_per_n[
-                    n
-                ] * (
+                kl += np.sum(
+                    self.eta_node.vi_mu[n, :] * self.vi_par[n]
+                ) - self.params.I_per_n[n] * (
                     np.log(self.eta_node.vi_zeta[n])
                     + np.sum(self.eta_node.E_exp_eta[n, :]) / self.eta_node.vi_zeta[n]
                     - 1
@@ -353,22 +358,22 @@ class nodeCTM_xi(nodeCTM_general):
         self.elbo = kl + entropy
 
 
-class nodeCTM_beta(nodeCTM_general):
+class nodeCTM_beta:
     """
     Class to define beta node (L times G).
     """
 
-    def __init__(self, alpha, vi_alpha, general_params):
-        super().__init__(**general_params)
+    def __init__(self, alpha, vi_alpha, params: CTMParams):
+        self.params = params
 
         # N x L x G
         self.alpha = alpha
         self.vi_alpha = vi_alpha
 
         self.lnGamma_sum_vi_alpha = gammaln(np.sum(self.vi_alpha, axis=1))
-        self.sum_lnGamma_alpha = self.G * gammaln(self.alpha)
+        self.sum_lnGamma_alpha = self.params.G * gammaln(self.alpha)
 
-        self.lnGamma_sum_alpha = gammaln(self.G * self.alpha)
+        self.lnGamma_sum_alpha = gammaln(self.params.G * self.alpha)
         self.sum_lnGamma_vi_alpha = np.sum(gammaln(self.vi_alpha), axis=1)
 
         self.digamma_vi_alpha = digamma(self.vi_alpha)
@@ -381,10 +386,10 @@ class nodeCTM_beta(nodeCTM_general):
         self.y_node = y_node
 
     def update(self):
-        vi_alpha = self.alpha * np.ones((self.L, self.G))
+        vi_alpha = self.alpha * np.ones((self.params.L, self.params.G))
 
-        for n in range(self.N):
-            if not self.maskNA_N[n]:
+        for n in range(self.params.N):
+            if not self.params.maskNA_N[n]:
                 vi_alpha += np.dot(self.xi_node.vi_par[n].T, self.y_node.data[n])
 
         self.vi_alpha = vi_alpha
@@ -400,9 +405,9 @@ class nodeCTM_beta(nodeCTM_general):
     def ELBO(self):
         elbo = (
             np.sum(self.lnGamma_sum_vi_alpha)
-            - self.L * self.lnGamma_sum_alpha
+            - self.params.L * self.lnGamma_sum_alpha
             - np.sum(self.sum_lnGamma_vi_alpha)
-            + self.L * self.sum_lnGamma_alpha
+            + self.params.L * self.sum_lnGamma_alpha
             + np.sum(
                 (self.vi_alpha - self.alpha)
                 * (self.digamma_vi_alpha.T - self.digamma_sum_vi_alpha).T
@@ -412,13 +417,13 @@ class nodeCTM_beta(nodeCTM_general):
         self.elbo = -elbo
 
 
-class nodeCTM_y(nodeCTM_general):
+class nodeCTM_y:
     """
     Class to define observed y node (a list of N elements: I_n times G).
     """
 
-    def __init__(self, data, general_params):
-        super().__init__(**general_params)
+    def __init__(self, data, params: CTMParams):
+        self.params = params
 
         self.data = data
 
@@ -430,7 +435,7 @@ class nodeCTM_y(nodeCTM_general):
 
     def ELBO(self):
         elbo = 0
-        for n in range(self.N):
+        for n in range(self.params.N):
             term_E_log_beta = (
                 self.beta_node.digamma_vi_alpha.T - self.beta_node.digamma_sum_vi_alpha
             )
@@ -512,26 +517,26 @@ class CTM:
         self.maskNA_N = maskNA
         self.maskNA_N_L = np.outer(self.maskNA_N, self.L * [True])
 
-        # general params
-        general_params = {
-            "N": self.N,
-            "L": self.L,
-            "G": self.G,
-            "I_per_n": self.I_per_n,
-            "J_per_n": self.J_per_n,
-            "maskNA_N": self.maskNA_N,
-            "maskNA_N_L": self.maskNA_N_L,
-        }
+        # Create shared parameters object
+        self.params = CTMParams(
+            N=self.N,
+            L=self.L,
+            G=self.G,
+            I_per_n=self.I_per_n,
+            J_per_n=self.J_per_n,
+            maskNA_N=self.maskNA_N,
+            maskNA_N_L=self.maskNA_N_L,
+        )
 
         # CREATING NODES:
         Sigma0 = starting_params_Sigma(starting_params, self.L)
-        self.node_Sigma0 = nodeCTM_Sigma0(Sigma0, general_params=general_params)
+        self.node_Sigma0 = nodeCTM_Sigma0(Sigma0, params=self.params)
 
         mu0 = starting_params_mu(starting_params, self.L)
-        self.node_mu0 = nodeCTM_mu0(mu0, general_params=general_params)
+        self.node_mu0 = nodeCTM_mu0(mu0, params=self.params)
 
         topics = starting_params_beta(starting_params, self.L, self.G)
-        self.node_beta = nodeCTM_beta(1e-5, topics, general_params=general_params)
+        self.node_beta = nodeCTM_beta(1e-5, topics, params=self.params)
 
         if self.FA:
             self.node_w_z = nodeCTM_w_z(
@@ -539,7 +544,7 @@ class CTM:
                 np.ones((L, K)),
                 np.ones((N, K)),
                 np.ones((N, K)),
-                general_params=general_params,
+                params=self.params,
             )
         else:
             self.node_w_z = nodeCTM_w_z(
@@ -547,19 +552,19 @@ class CTM:
                 np.zeros((L, K)),
                 np.zeros((N, K)),
                 np.zeros((N, K)),
-                general_params=general_params,
+                params=self.params,
             )
 
         self.node_eta = nodeCTM_eta(
             np.random.normal(size=(N, L)) / (self.N * self.L),
             np.ones((N, L)) / (self.N * self.L),
             np.ones(N),
-            general_params=general_params,
+            params=self.params,
         )
 
-        self.node_xi = nodeCTM_xi(init_xi_par, general_params=general_params)
+        self.node_xi = nodeCTM_xi(init_xi_par, params=self.params)
 
-        self.node_y = nodeCTM_y(data, general_params=general_params)
+        self.node_y = nodeCTM_y(data, params=self.params)
 
         self.elbo = 0
 
