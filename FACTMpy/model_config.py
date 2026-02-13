@@ -78,116 +78,6 @@ class ZPrior(Enum):
         return self.value
 
 
-def validate_likelihoods(
-    likelihoods: Union[List[str], List[Likelihood]], num_views: int
-) -> List[Likelihood]:
-    """
-    Validate and convert likelihoods to enum list.
-
-    Args:
-        likelihoods: List of likelihood strings or enums
-        num_views: Expected number of views
-
-    Returns:
-        List of Likelihood enums
-
-    Raises:
-        ValueError: If length doesn't match or values are invalid
-    """
-    if len(likelihoods) != num_views:
-        raise ValueError(
-            f"Number of likelihoods ({len(likelihoods)}) "
-            f"must match number of views ({num_views})"
-        )
-
-    result = []
-    for i, lik in enumerate(likelihoods):
-        if isinstance(lik, Likelihood):
-            result.append(lik)
-        else:
-            try:
-                result.append(Likelihood.from_string(lik))
-            except ValueError as e:
-                raise ValueError(f"View {i}: {e}") from e
-
-    return result
-
-
-def validate_w_priors(
-    w_priors: Union[List[str], List[WPrior], None],
-    likelihoods: List[Likelihood],
-    num_views: int,
-) -> List[WPrior]:
-    """
-    Validate and convert W_priors to enum list with defaults.
-
-    Args:
-        w_priors: List of W_prior strings/enums or None for defaults
-        likelihoods: List of likelihoods for each view
-        num_views: Number of views
-
-    Returns:
-        List of WPrior enums
-    """
-    if w_priors is None:
-        # Default: ARD for all views
-        return [WPrior.ARD] * num_views
-
-    if len(w_priors) != num_views:
-        raise ValueError(
-            f"Number of W_priors ({len(w_priors)}) "
-            f"must match number of views ({num_views})"
-        )
-
-    result = []
-    for i, prior in enumerate(w_priors):
-        if isinstance(prior, WPrior):
-            result.append(prior)
-        else:
-            try:
-                result.append(WPrior.from_string(prior))
-            except ValueError as e:
-                raise ValueError(f"View {i}: {e}") from e
-
-    return result
-
-
-def validate_z_priors(
-    z_priors: Union[List[str], List[ZPrior], None], num_factors: int
-) -> List[ZPrior]:
-    """
-    Validate and convert Z_priors to enum list with defaults.
-
-    Args:
-        z_priors: List of Z_prior strings/enums or None for defaults
-        num_factors: Number of latent factors
-
-    Returns:
-        List of ZPrior enums
-    """
-    if z_priors is None:
-        # Default: stdN for all factors
-        return [ZPrior.STD_NORMAL] * num_factors
-
-    if len(z_priors) != num_factors:
-        raise ValueError(
-            f"Number of Z_priors ({len(z_priors)}) "
-            f"must match number of factors ({num_factors})"
-        )
-
-    result = []
-    for i, prior in enumerate(z_priors):
-        if isinstance(prior, ZPrior):
-            result.append(prior)
-        else:
-            try:
-                result.append(ZPrior.from_string(prior))
-            except ValueError as e:
-                raise ValueError(f"Factor {i}: {e}") from e
-
-    return result
-
-
 @dataclass
 class ViewConfig:
     """
@@ -449,11 +339,9 @@ class ModelConfig:
         if z_priors is None:
             if num_factors is None:
                 raise ValueError("Must provide either z_priors or num_factors")
-            z_priors_enum = [ZPrior.STD_NORMAL] * num_factors
-        else:
-            z_priors_enum = validate_z_priors(z_priors, len(z_priors))
+            z_priors = [ZPrior.STD_NORMAL] * num_factors
 
-        return cls(view_configs=view_configs, z_priors=z_priors_enum)
+        return cls(view_configs=view_configs, z_priors=z_priors)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""

@@ -1,7 +1,7 @@
 import numpy as np
 from CTM_model import CTM
 from FACTM_model import FACTM
-from model_config import ModelConfig
+from model_config import Likelihood, ModelConfig, WPrior
 from sklearn.decomposition import PCA, FactorAnalysis
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import MinMaxScaler
@@ -44,15 +44,15 @@ class FACTModel(FACTM):
 
         self.elbo_sequence = []
 
-    def pretrain(self, FA_pretrain="PCA", CTM_pretrain="CTM"):
+    def pretrain(self, FA_pretrain="PCA", CTM_pretrain=Likelihood.CTM):
         if FA_pretrain not in ["PCA", "FA"]:
             raise TypeError("Pretraining for FA part should be one of: PCA, FA")
-        if CTM_pretrain not in ["CTM"]:
+        if CTM_pretrain != Likelihood.CTM:
             raise TypeError("Pretraining for CTM part should be one of: CTM")
 
-        if CTM_pretrain == "CTM":
+        if CTM_pretrain == Likelihood.CTM:
             for m in range(self.M):
-                if self.likelihoods[m] == "CTM":
+                if self.likelihoods[m] == Likelihood.CTM:
                     print("Pretraining CTM for a modality " + str(m))
 
                     mod_ctm_tmp = CTM(
@@ -84,7 +84,7 @@ class FACTModel(FACTM):
             modFA = FactorAnalysis(n_components=self.fa.K)
 
         # scaled and centered data
-        if CTM_pretrain == "CTM":
+        if CTM_pretrain == Likelihood.CTM:
             data_tmp = []
             for m in range(self.M):
                 data_tmp_m = self.fa.nodelist_y[m].data
@@ -106,12 +106,12 @@ class FACTModel(FACTM):
 
         for m in range(self.M):
             # get weights + scale back according to the variance of the features
-            if self.w_priors[m] in ["ARD", "ARD_SS"]:
+            if self.w_priors[m] in [WPrior.ARD, WPrior.ARD_SS]:
                 self.fa.nodelist_hat_w[m].vi_mu = (
                     np.std(self.fa.nodelist_y[m].data, axis=0)
                     * loadings_tmp[views_segments[m] : views_segments[m + 1], :].T
                 ).T
-            if self.w_priors[m] == "None":
+            if self.w_priors[m] == WPrior.NONE:
                 self.fa.nodelist_w_not_sparse[m].vi_mu = (
                     np.std(self.fa.nodelist_y[m].data, axis=0)
                     * loadings_tmp[views_segments[m] : views_segments[m + 1], :].T
@@ -210,15 +210,15 @@ class FACTModel(FACTM):
 
         # Extract likelihoods and W_priors from model_config
         # Convert to strings for backward compatibility with FACTM/FA classes
-        self.likelihoods = [str(lik) for lik in self.model_config.likelihoods]
-        self.w_priors = [str(prior) for prior in self.model_config.w_priors]
-        self.z_priors = [str(prior) for prior in self.model_config.z_priors]
+        self.likelihoods = self.model_config.likelihoods
+        self.w_priors = self.model_config.w_priors
+        self.z_priors = self.model_config.z_priors
 
         # Extract L values from CTM view configs
         self.L = self.model_config.L
 
         # N - determine from first view
-        if self.likelihoods[0] == "CTM":
+        if self.likelihoods[0] == Likelihood.CTM:
             # if M0 a structured view
             self.N = len(self.data["M0"])
         else:
@@ -231,7 +231,7 @@ class FACTModel(FACTM):
 
         m_ctm = 0
         for m in range(self.M):
-            if self.likelihoods[m] != "CTM":
+            if self.likelihoods[m] != Likelihood.CTM:
                 D.append(self.data["M" + str(m)].shape[1])
             else:
                 D.append(self.L[m_ctm])

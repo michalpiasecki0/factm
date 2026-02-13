@@ -5,6 +5,7 @@ by joining FA and CTM parts.
 import numpy as np
 from CTM_model import CTM
 from FA_model import FA
+from model_config import Likelihood
 
 
 class FACTM:
@@ -36,7 +37,7 @@ class FACTM:
         self.M = M
         self.D = D
         # Numbers of niches (topics) in not observed modalities
-        self.L = [D[m] for m in range(M) if self.likelihoods[m] == "CTM"]
+        self.L = [D[m] for m in range(M) if self.likelihoods[m] == Likelihood.CTM]
         # Numbers of types (e.g. cell types, words) in not observed modalities
         self.G = G
 
@@ -56,9 +57,11 @@ class FACTM:
         )
 
         # create all CTMs
-        self.M_CTM = np.sum(np.array(self.likelihoods) == "CTM")
-        self.index_CTM = np.where(np.array(self.likelihoods) == "CTM")[0]
-        self.key_CTM = ["M" + str(m) for m in range(M) if self.likelihoods[m] == "CTM"]
+        self.M_CTM = np.sum(np.array(self.likelihoods) == Likelihood.CTM)
+        self.index_CTM = np.where(np.array(self.likelihoods) == Likelihood.CTM)[0]
+        self.key_CTM = [
+            "M" + str(m) for m in range(M) if self.likelihoods[m] == Likelihood.CTM
+        ]
 
         if starting_params_ctm is None:
             starting_params_ctm = []
