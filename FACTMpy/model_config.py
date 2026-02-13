@@ -92,7 +92,7 @@ class ViewConfig:
 
     likelihood: Likelihood
     w_prior: WPrior
-    L: Optional[int] = None  # Number of topics for CTM views
+    L: int | None = None  # Number of topics for CTM views
 
     def __post_init__(self):
         """Validate that CTM views have L specified."""
@@ -112,7 +112,7 @@ class ViewConfig:
         cls,
         likelihood: Union[str, Likelihood],
         w_prior: Union[str, WPrior],
-        L: Optional[int] = None,
+        L: int | None = None,
     ) -> "ViewConfig":
         """
         Create ViewConfig from strings (convenience method).
@@ -147,7 +147,7 @@ class ViewConfig:
 def create_view_configs(
     *configs: Union[
         ViewConfig,
-        tuple[Union[str, Likelihood], Union[str, WPrior], Optional[int]],
+        tuple[Union[str, Likelihood], Union[str, WPrior], int | None],
     ],
 ) -> List[ViewConfig]:
     """
@@ -200,7 +200,7 @@ def create_view_configs(
 def create_view_configs_from_lists(
     likelihoods: List[Union[str, Likelihood]],
     w_priors: List[Union[str, WPrior]],
-    L: Optional[List[int]] = None,
+    L: List[int] | None = None,
 ) -> List[ViewConfig]:
     """
     Create list of ViewConfig from separate lists (for backward compatibility).
@@ -315,8 +315,8 @@ class ModelConfig:
         likelihoods: List[Union[str, Likelihood]],
         w_priors: List[Union[str, WPrior]],
         z_priors: Optional[List[Union[str, ZPrior]]] = None,
-        num_factors: Optional[int] = None,
-        L: Optional[List[int]] = None,
+        num_factors: int | None = None,
+        L: List[int] | None = None,
     ) -> "ModelConfig":
         """
         Create ModelConfig from legacy separate lists format.
