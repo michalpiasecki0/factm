@@ -9,16 +9,25 @@ from enum import Enum
 from typing import List
 
 
+class FA_Pretrain(Enum):
+    """Supported FA pretrain types."""
+
+    PCA = "PCA"
+    FA = "FA"
+
+
+class CTM_pretrain(Enum):
+    """Supported CTM pretrain types."""
+
+    CTM = "CTM"
+
+
 class Likelihood(Enum):
     """Supported likelihood types for data views."""
 
     NORMAL = "normal"
     BERNOULLI = "Bernoulli"
     CTM = "CTM"
-
-    def __str__(self) -> str:
-        """Return string value for backward compatibility."""
-        return self.value
 
 
 class WPrior(Enum):
@@ -29,20 +38,12 @@ class WPrior(Enum):
     ARD_SS = "ARD_SS"
     PATHWAYS = "pathways"
 
-    def __str__(self) -> str:
-        """Return string value for backward compatibility."""
-        return self.value
-
 
 class ZPrior(Enum):
     """Supported latent factor prior types."""
 
     STD_NORMAL = "stdN"
     INFORMED = "informed"
-
-    def __str__(self) -> str:
-        """Return string value for backward compatibility."""
-        return self.value
 
 
 @dataclass
@@ -92,16 +93,6 @@ class ViewConfig:
         self.likelihood = likelihood
         self.w_prior = w_prior
         self.L = L
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for serialization."""
-        result = {
-            "likelihood": self.likelihood.value,
-            "w_prior": self.w_prior.value,
-        }
-        if self.L is not None:
-            result["L"] = self.L
-        return result
 
 
 @dataclass

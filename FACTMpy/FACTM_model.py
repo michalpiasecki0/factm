@@ -94,33 +94,37 @@ class FACTM:
 
         for m_ctm in range(self.M_CTM):
             # update parameters of CTM shared with FA
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w = (
-                self.fa.nodelist_w[self.index_CTM[m_ctm]].E_w + 0.0
-            )
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w_squared = (
-                self.fa.nodelist_w[self.index_CTM[m_ctm]].E_w_squared + 0.0
-            )
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_z = self.fa.node_z.E_z + 0.0
+            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w = self.fa.nodelist_w[
+                self.index_CTM[m_ctm]
+            ].E_w.copy()
+            self.ctm_list[
+                self.key_CTM[m_ctm]
+            ].node_w_z.E_w_squared = self.fa.nodelist_w[
+                self.index_CTM[m_ctm]
+            ].E_w_squared.copy()
+            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_z = self.fa.node_z.E_z.copy()
             self.ctm_list[
                 self.key_CTM[m_ctm]
             ].node_w_z.E_z_squared = self.fa.node_z.E_z_squared
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w_z = (
-                self.fa.nodelist_w[self.index_CTM[m_ctm]].E_w_z + 0.0
-            )
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w_z_squared = (
-                self.fa.nodelist_w[self.index_CTM[m_ctm]].E_w_z_squared + 0.0
-            )
+            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w_z = self.fa.nodelist_w[
+                self.index_CTM[m_ctm]
+            ].E_w_z.copy()
+            self.ctm_list[
+                self.key_CTM[m_ctm]
+            ].node_w_z.E_w_z_squared = self.fa.nodelist_w[
+                self.index_CTM[m_ctm]
+            ].E_w_z_squared.copy()
 
             # update CTM parameters
             self.ctm_list[self.key_CTM[m_ctm]].update()
 
             # update FA parameters based on CTM
-            self.fa.nodelist_y[self.index_CTM[m_ctm]].data = (
-                self.ctm_list[self.key_CTM[m_ctm]].node_eta.E_eta_minus_mu0 + 0.0
-            )
-            self.fa.nodelist_tau[self.index_CTM[m_ctm]].Sigma0_inv = (
-                self.ctm_list[self.key_CTM[m_ctm]].node_Sigma0.Sigma0 + 0.0
-            )
+            self.fa.nodelist_y[self.index_CTM[m_ctm]].data = self.ctm_list[
+                self.key_CTM[m_ctm]
+            ].node_eta.E_eta_minus_mu0.copy()
+            self.fa.nodelist_tau[self.index_CTM[m_ctm]].Sigma0_inv = self.ctm_list[
+                self.key_CTM[m_ctm]
+            ].node_Sigma0.Sigma0.copy()
 
     def ELBO(self):
         self.fa.ELBO()

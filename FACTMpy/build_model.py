@@ -1,7 +1,7 @@
 import numpy as np
 from CTM_model import CTM
 from FACTM_model import FACTM
-from model_config import Likelihood, ModelConfig, WPrior
+from model_config import FA_Pretrain, Likelihood, ModelConfig, WPrior
 from sklearn.decomposition import PCA, FactorAnalysis
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import MinMaxScaler
@@ -44,13 +44,17 @@ class FACTModel(FACTM):
 
         self.elbo_sequence = []
 
-    def pretrain(self, FA_pretrain="PCA", CTM_pretrain=Likelihood.CTM):
-        if FA_pretrain not in ["PCA", "FA"]:
-            raise TypeError("Pretraining for FA part should be one of: PCA, FA")
-        if CTM_pretrain != Likelihood.CTM:
-            raise TypeError("Pretraining for CTM part should be one of: CTM")
+    def pretrain(self, FA_pretrain=FA_Pretrain.PCA, CTM_pretrain=Likelihood.CTM):
+        if FA_pretrain not in [FA_Pretrain.PCA, FA_Pretrain.FA]:
+            raise TypeError(
+                "Pretraining for FA part should be one of FA_Pretrain enum values"
+            )
+        if CTM_pretrain != CTM_pretrain.CTM:
+            raise TypeError(
+                "Pretraining for CTM part should be one of CTM_pretrain enum values"
+            )
 
-        if CTM_pretrain == Likelihood.CTM:
+        if CTM_pretrain == CTM_pretrain.CTM:
             for m in range(self.M):
                 if self.likelihoods[m] == Likelihood.CTM:
                     print("Pretraining CTM for a modality " + str(m))
@@ -78,14 +82,16 @@ class FACTModel(FACTM):
                     )
 
         print("Pretraining FA")
-        if FA_pretrain == "PCA":
+
+        if FA_pretrain == FA_Pretrain.PCA:
             modFA = PCA(n_components=self.fa.K, whiten=True)
-        if FA_pretrain == "FA":
+        if FA_pretrain == FA_Pretrain.FA:
             modFA = FactorAnalysis(n_components=self.fa.K)
 
         # scaled and centered data
-        if CTM_pretrain == Likelihood.CTM:
+        if CTM_pretrain == CTM_pretrain.CTM:
             data_tmp = []
+
             for m in range(self.M):
                 data_tmp_m = self.fa.nodelist_y[m].data
                 data_tmp.append(
@@ -137,7 +143,7 @@ class FACTModel(FACTM):
 
         self.__first_fit = False
 
-        print("Fitting a model.")
+        print("Fitting a model")
 
         for _ in tqdm(range(max_iter)):
             self.update()
@@ -230,6 +236,7 @@ class FACTModel(FACTM):
         G = []
 
         m_ctm = 0
+
         for m in range(self.M):
             if self.likelihoods[m] != Likelihood.CTM:
                 D.append(self.data["M" + str(m)].shape[1])

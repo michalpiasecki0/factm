@@ -333,7 +333,7 @@ class nodeFA_w_m:
                 self.hat_w_m_node.update_k(k, nominator, denominator)
 
                 if self.params.W_priors[self.m] == WPrior.ARD_SS:  # TBD: check
-                    E_log_LR_theta = self.theta_m_node.E_log_LR[k] + 0.0
+                    E_log_LR_theta = self.theta_m_node.E_log_LR[k].copy()
                     self.s_m_node.update_k(
                         k,
                         nominator,
@@ -499,7 +499,7 @@ class nodeFA_alpha_m:
         # start from E_alpha = 1
         # update of vi_a:
         self.vi_a = a0 + self.params.D[m] * np.ones(self.params.K) / 2
-        self.vi_b = self.vi_a + 0.0
+        self.vi_b = self.vi_a.copy()
 
         self.update_all_params()
 
@@ -634,7 +634,7 @@ class nodeFA_tau_m:
             self.vi_a = (
                 self.a0 + (self.params.N - np.sum(self.y_m_node.data.mask, axis=0)) / 2
             )
-            self.vi_b = self.vi_a + 0.0
+            self.vi_b = self.vi_a.copy()
             self.update_all_params()
             self.update_params()
 
