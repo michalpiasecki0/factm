@@ -5,6 +5,7 @@ by joining FA and CTM parts.
 import numpy as np
 from CTM_model import CTM
 from FA_model import FA
+from model_config import Likelihood
 
 
 class FACTM:
@@ -36,7 +37,7 @@ class FACTM:
         self.M = M
         self.D = D
         # Numbers of niches (topics) in not observed modalities
-        self.L = [D[m] for m in range(M) if self.likelihoods[m] == "CTM"]
+        self.L = [D[m] for m in range(M) if self.likelihoods[m] == Likelihood.CTM]
         # Numbers of types (e.g. cell types, words) in not observed modalities
         self.G = G
 
@@ -56,9 +57,11 @@ class FACTM:
         )
 
         # create all CTMs
-        self.M_CTM = np.sum(np.array(self.likelihoods) == "CTM")
-        self.index_CTM = np.where(np.array(self.likelihoods) == "CTM")[0]
-        self.key_CTM = ["M" + str(m) for m in range(M) if self.likelihoods[m] == "CTM"]
+        self.M_CTM = np.sum(np.array(self.likelihoods) == Likelihood.CTM)
+        self.index_CTM = np.where(np.array(self.likelihoods) == Likelihood.CTM)[0]
+        self.key_CTM = [
+            "M" + str(m) for m in range(M) if self.likelihoods[m] == Likelihood.CTM
+        ]
 
         if starting_params_ctm is None:
             starting_params_ctm = []
@@ -91,33 +94,37 @@ class FACTM:
 
         for m_ctm in range(self.M_CTM):
             # update parameters of CTM shared with FA
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w = (
-                self.fa.nodelist_w[self.index_CTM[m_ctm]].E_w + 0.0
-            )
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w_squared = (
-                self.fa.nodelist_w[self.index_CTM[m_ctm]].E_w_squared + 0.0
-            )
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_z = self.fa.node_z.E_z + 0.0
+            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w = self.fa.nodelist_w[
+                self.index_CTM[m_ctm]
+            ].E_w.copy()
+            self.ctm_list[
+                self.key_CTM[m_ctm]
+            ].node_w_z.E_w_squared = self.fa.nodelist_w[
+                self.index_CTM[m_ctm]
+            ].E_w_squared.copy()
+            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_z = self.fa.node_z.E_z.copy()
             self.ctm_list[
                 self.key_CTM[m_ctm]
             ].node_w_z.E_z_squared = self.fa.node_z.E_z_squared
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w_z = (
-                self.fa.nodelist_w[self.index_CTM[m_ctm]].E_w_z + 0.0
-            )
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w_z_squared = (
-                self.fa.nodelist_w[self.index_CTM[m_ctm]].E_w_z_squared + 0.0
-            )
+            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w_z = self.fa.nodelist_w[
+                self.index_CTM[m_ctm]
+            ].E_w_z.copy()
+            self.ctm_list[
+                self.key_CTM[m_ctm]
+            ].node_w_z.E_w_z_squared = self.fa.nodelist_w[
+                self.index_CTM[m_ctm]
+            ].E_w_z_squared.copy()
 
             # update CTM parameters
             self.ctm_list[self.key_CTM[m_ctm]].update()
 
             # update FA parameters based on CTM
-            self.fa.nodelist_y[self.index_CTM[m_ctm]].data = (
-                self.ctm_list[self.key_CTM[m_ctm]].node_eta.E_eta_minus_mu0 + 0.0
-            )
-            self.fa.nodelist_tau[self.index_CTM[m_ctm]].Sigma0_inv = (
-                self.ctm_list[self.key_CTM[m_ctm]].node_Sigma0.Sigma0 + 0.0
-            )
+            self.fa.nodelist_y[self.index_CTM[m_ctm]].data = self.ctm_list[
+                self.key_CTM[m_ctm]
+            ].node_eta.E_eta_minus_mu0.copy()
+            self.fa.nodelist_tau[self.index_CTM[m_ctm]].Sigma0_inv = self.ctm_list[
+                self.key_CTM[m_ctm]
+            ].node_Sigma0.Sigma0.copy()
 
     def ELBO(self):
         self.fa.ELBO()

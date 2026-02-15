@@ -1,6 +1,7 @@
 import numpy as np
 from CTM_model import CTM
 from FACTM_model import FACTM
+from model_config import FA_Pretrain, Likelihood, ModelConfig, WPrior
 from sklearn.decomposition import PCA, FactorAnalysis
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import MinMaxScaler
@@ -12,10 +13,7 @@ class FACTModel(FACTM):
         self,
         data,
         K,
-        L,
-        likelihoods,
-        Z_priors=None,
-        W_priors=None,
+        model_config: ModelConfig,
         seed=None,
         *args,
         **kwargs,
@@ -25,10 +23,10 @@ class FACTModel(FACTM):
             np.random.seed(self.seed)
 
         self.K = K
-        self.L = L
         self.data = data
+        self.model_config = model_config
 
-        self.__assign_params(likelihoods, Z_priors, W_priors)
+        self.__assign_params()
 
         super(FACTModel, self).__init__(
             data,
@@ -38,23 +36,27 @@ class FACTModel(FACTM):
             self.D,
             self.G,
             self.likelihoods,
-            self.Z_priors,
-            self.W_priors,
+            self.z_priors,
+            self.w_priors,
         )
 
         self.__first_fit = True
 
         self.elbo_sequence = []
 
-    def pretrain(self, FA_pretrain="PCA", CTM_pretrain="CTM"):
-        if FA_pretrain not in ["PCA", "FA"]:
-            raise TypeError("Pretraining for FA part should be one of: PCA, FA")
-        if CTM_pretrain not in ["CTM"]:
-            raise TypeError("Pretraining for CTM part should be one of: CTM")
+    def pretrain(self, FA_pretrain=FA_Pretrain.PCA, CTM_pretrain=Likelihood.CTM):
+        if FA_pretrain not in [FA_Pretrain.PCA, FA_Pretrain.FA]:
+            raise TypeError(
+                "Pretraining for FA part should be one of FA_Pretrain enum values"
+            )
+        if CTM_pretrain != CTM_pretrain.CTM:
+            raise TypeError(
+                "Pretraining for CTM part should be one of CTM_pretrain enum values"
+            )
 
-        if CTM_pretrain == "CTM":
+        if CTM_pretrain == CTM_pretrain.CTM:
             for m in range(self.M):
-                if self.likelihoods[m] == "CTM":
+                if self.likelihoods[m] == Likelihood.CTM:
                     print("Pretraining CTM for a modality " + str(m))
 
                     mod_ctm_tmp = CTM(
@@ -80,14 +82,16 @@ class FACTModel(FACTM):
                     )
 
         print("Pretraining FA")
-        if FA_pretrain == "PCA":
+
+        if FA_pretrain == FA_Pretrain.PCA:
             modFA = PCA(n_components=self.fa.K, whiten=True)
-        if FA_pretrain == "FA":
+        if FA_pretrain == FA_Pretrain.FA:
             modFA = FactorAnalysis(n_components=self.fa.K)
 
         # scaled and centered data
-        if CTM_pretrain == "CTM":
+        if CTM_pretrain == CTM_pretrain.CTM:
             data_tmp = []
+
             for m in range(self.M):
                 data_tmp_m = self.fa.nodelist_y[m].data
                 data_tmp.append(
@@ -108,12 +112,12 @@ class FACTModel(FACTM):
 
         for m in range(self.M):
             # get weights + scale back according to the variance of the features
-            if self.W_priors[m] in ["ARD", "ARD_SS"]:
+            if self.w_priors[m] in [WPrior.ARD, WPrior.ARD_SS]:
                 self.fa.nodelist_hat_w[m].vi_mu = (
                     np.std(self.fa.nodelist_y[m].data, axis=0)
                     * loadings_tmp[views_segments[m] : views_segments[m + 1], :].T
                 ).T
-            if self.W_priors[m] in ["None"]:
+            if self.w_priors[m] == WPrior.NONE:
                 self.fa.nodelist_w_not_sparse[m].vi_mu = (
                     np.std(self.fa.nodelist_y[m].data, axis=0)
                     * loadings_tmp[views_segments[m] : views_segments[m + 1], :].T
@@ -139,7 +143,7 @@ class FACTModel(FACTM):
 
         self.__first_fit = False
 
-        print("Fitting a model.")
+        print("Fitting a model")
 
         for _ in tqdm(range(max_iter)):
             self.update()
@@ -193,25 +197,48 @@ class FACTModel(FACTM):
     def get_predictions_FA(self, m):
         return self.fa.nodelist_w[m].E_w_z
 
-    def __assign_params(self, likelihoods, Z_priors, W_priors):
-        # M
+    def __assign_params(self):
+        """Extract parameters from model_config."""
+        # Validate number of views matches data
         self.M = len(self.data)
+        if self.model_config.num_views != self.M:
+            raise ValueError(
+                f"Number of views in model_config ({self.model_config.num_views}) "
+                f"must match number of views in data ({self.M})"
+            )
 
-        # N
-        if likelihoods[0] == "CTM":
-            # if M0 a structered view
+        # Validate number of factors
+        if self.model_config.num_factors != self.K:
+            raise ValueError(
+                f"Number of factors in model_config ({self.model_config.num_factors}) "
+                f"must match K ({self.K})"
+            )
+
+        # Extract likelihoods and W_priors from model_config
+        # Convert to strings for backward compatibility with FACTM/FA classes
+        self.likelihoods = self.model_config.likelihoods
+        self.w_priors = self.model_config.w_priors
+        self.z_priors = self.model_config.z_priors
+
+        # Extract L values from CTM view configs
+        self.L = self.model_config.L
+
+        # N - determine from first view
+        if self.likelihoods[0] == Likelihood.CTM:
+            # if M0 a structured view
             self.N = len(self.data["M0"])
         else:
-            # if  M0 a simple view
+            # if M0 a simple view
             self.N = self.data["M0"].shape[0]
 
-        # D, G and the number of structered views
+        # D, G and the number of structured views
         D = []
         G = []
 
         m_ctm = 0
+
         for m in range(self.M):
-            if not likelihoods[m] == "CTM":
+            if self.likelihoods[m] != Likelihood.CTM:
                 D.append(self.data["M" + str(m)].shape[1])
             else:
                 D.append(self.L[m_ctm])
@@ -221,18 +248,3 @@ class FACTModel(FACTM):
         self.M_CTM = m_ctm
         self.D = D
         self.G = G
-
-        self.likelihoods = likelihoods
-        if Z_priors is None:
-            self.Z_priors = ["stdN"] * self.K
-        else:
-            self.Z_priors = Z_priors
-        if W_priors is None:
-            self.W_priors = []
-            for m in range(self.M):
-                if not likelihoods[m] == "CTM":
-                    self.W_priors.append("ARD")
-                else:
-                    self.W_priors.append("ARD")
-        else:
-            self.W_priors = W_priors
