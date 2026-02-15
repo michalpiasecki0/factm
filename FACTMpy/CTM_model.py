@@ -8,7 +8,8 @@ from typing import List
 import numpy as np
 from scipy.optimize import minimize
 from scipy.special import digamma, gammaln
-from utils import log_eps
+
+from FACTMpy.utils import log_eps
 
 EPS = 1e-20
 

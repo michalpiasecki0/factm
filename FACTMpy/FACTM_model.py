@@ -4,9 +4,10 @@ by joining FA and CTM parts.
 """
 
 import numpy as np
-from CTM_model import CTM
-from FA_model import FA
-from model_config import Likelihood
+
+from FACTMpy.CTM_model import CTM
+from FACTMpy.FA_model import FA
+from FACTMpy.model_config import Likelihood
 
 
 class FACTM:

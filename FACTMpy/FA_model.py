@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from typing import List
 
 import numpy as np
-from model_config import Likelihood, WPrior
 from scipy.special import betaln, digamma, gammaln
-from utils import log_eps, xlogx
+
+from FACTMpy.model_config import Likelihood, WPrior
+from FACTMpy.utils import log_eps, xlogx
 
 EPS = 1e-20
 

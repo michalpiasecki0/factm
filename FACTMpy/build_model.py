@@ -1,11 +1,12 @@
 import numpy as np
-from CTM_model import CTM
-from FACTM_model import FACTM
-from model_config import FA_Pretrain, Likelihood, ModelConfig, WPrior
 from sklearn.decomposition import PCA, FactorAnalysis
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
+
+from FACTMpy.CTM_model import CTM
+from FACTMpy.FACTM_model import FACTM
+from FACTMpy.model_config import FA_Pretrain, Likelihood, ModelConfig, WPrior
 
 
 class FACTModel(FACTM):

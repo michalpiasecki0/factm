@@ -1,4 +1,6 @@
-from build_model import *  # noqa: F403
-from CTM_model import *  # noqa: F403
-from FA_model import *  # noqa: F403
-from FACTM_model import *  # noqa: F403
+from FACTMpy.build_model import FACTModel
+from FACTMpy.CTM_model import CTM
+from FACTMpy.FA_model import FA
+from FACTMpy.FACTM_model import FACTM
+
+__all__ = ["FACTModel", "CTM", "FA", "FACTM"]
