@@ -2,6 +2,7 @@
 This module provides Factor Analysis with Correlated Topic Model
 by joining FA and CTM parts.
 """
+
 import numpy as np
 from CTM_model import CTM
 from FA_model import FA

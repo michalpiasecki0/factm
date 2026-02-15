@@ -4,6 +4,7 @@ Model configuration enums and types for FACTM.
 This module provides type-safe enums for likelihoods and priors,
 preventing bugs from typos and invalid values.
 """
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import List

@@ -1,6 +1,7 @@
 """
 This module provides Factor Analysis model with all the nodes.
 """
+
 from dataclasses import dataclass
 from typing import List
 
