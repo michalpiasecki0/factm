@@ -1,0 +1,3 @@
+"""
+Factor Analysis likelihood implementations.
+"""

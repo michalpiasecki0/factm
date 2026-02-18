@@ -1,15 +1,21 @@
 """
 This module provides Factor Analysis model with all the nodes.
 """
-
+import importlib
 from dataclasses import dataclass
 from typing import List
 
 import numpy as np
-from scipy.special import betaln, digamma, gammaln
+from model_config import Likelihood, WPrior
+from scipy.special import digamma, gammaln
+from utils import log_eps, xlogx
+from w_priors.ARD import nodeFA_alpha_m, nodeFA_hat_w_m
+from w_priors.ARD_SS import nodeFA_s_m, nodeFA_theta_m
+from z_priors.StdNormal import nodeFA_z
 
-from FACTMpy.model_config import Likelihood, WPrior
-from FACTMpy.utils import log_eps, xlogx
+# Import None prior using importlib since "None" is a Python keyword
+_none_prior = importlib.import_module("w_priors.None")
+nodeFA_w_m_not_sparse = _none_prior.nodeFA_w_m_not_sparse
 
 EPS = 1e-20
 
@@ -27,201 +33,13 @@ class FAParams:
     W_priors: List[str]
 
 
-class nodeFA_z:
-    """
-    Class to define Z node (n times k)
-    """
-
-    def __init__(self, vi_mu, vi_var, params: FAParams):
-        self.params = params
-
-        self.vi_mu = vi_mu
-        self.vi_var = vi_var
-
-        self.update_params()
-
-        self.elbo = 0
-
-    def MB(self, y_list, w_list, tau_list):
-        self.y_node = y_list
-        self.w_node = w_list
-        self.tau_node = tau_list
-
-    def update(self):
-        # update informed - TBD
-
-        # update uninformed
-        for k in range(self.params.K):
-            if self.params.Z_priors[k] != "informed":
-                self.update_k(k)
-
-                for m in range(self.params.M):
-                    self.w_node[m].update_params_z()
-                    if self.params.likelihoods[m] in [
-                        Likelihood.NORMAL,
-                        Likelihood.BERNOULLI,
-                    ]:
-                        self.tau_node[m].update_params_w_z()
-
-    def update_informed(self, set_k):
-        pass  # TBD
-
-    def update_k(self, k):
-        vi_mu_new = np.zeros(self.params.N)
-        vi_var_new = np.zeros(self.params.N)
-
-        for m in range(self.params.M):
-            if self.params.likelihoods[m] in [Likelihood.NORMAL, Likelihood.BERNOULLI]:
-                # VI var
-                vi_var_new += np.ma.dot(
-                    self.tau_node[m].E_tau, self.w_node[m].E_w_squared[:, k]
-                )
-
-                # VI mu
-                resid = self.y_node[m].data - np.dot(self.w_node[m].E_w, self.E_z.T).T
-                partial_resid = (
-                    resid + np.outer(self.w_node[m].E_w[:, k], self.E_z[:, k]).T
-                )
-
-                vi_mu_new += np.ma.sum(
-                    self.tau_node[m].E_tau * self.w_node[m].E_w[:, k] * partial_resid,
-                    axis=1,
-                )
-
-            if self.params.likelihoods[m] in [Likelihood.CTM]:
-                # E[w' Sigma0^{-1} w]
-                E_quadratic_form_first_term = np.dot(
-                    np.dot(self.w_node[m].E_w[:, k], self.tau_node[m].Sigma0_inv),
-                    self.w_node[m].E_w[:, k],
-                )
-                E_quadratic_form_second_term = np.sum(
-                    np.diag(
-                        np.dot(
-                            self.tau_node[m].Sigma0_inv,
-                            np.diag(
-                                self.w_node[m].E_w_squared[:, k]
-                                - self.w_node[m].E_w[:, k] ** 2
-                            ),
-                        )
-                    )
-                )
-
-                # VI var
-                vi_var_new += E_quadratic_form_first_term + E_quadratic_form_second_term
-
-                # VI mu
-                resid = self.y_node[m].data - np.dot(self.w_node[m].E_w, self.E_z.T).T
-                partial_resid = (
-                    resid + np.outer(self.w_node[m].E_w[:, k], self.E_z[:, k]).T
-                )
-                first_term = np.dot(
-                    self.w_node[m].E_w[:, k], self.tau_node[m].Sigma0_inv
-                )
-                vi_mu_new += np.sum(first_term * partial_resid, axis=1)
-
-        # VI var:
-        # prior variance of Z equals 1
-        vi_var_new = 1 / (vi_var_new + 1)
-
-        # VI mu
-        vi_mu_new = vi_mu_new * vi_var_new
-
-        # update mu, var and other internal params
-        self.vi_mu[:, k] = vi_mu_new
-        self.vi_var[:, k] = vi_var_new
-        self.update_params()
-
-    def update_params(self):
-        self.E_z = self.vi_mu
-        self.E_z_squared = self.vi_var + self.vi_mu**2
-
-    def ELBO(self):
-        self.elbo = (
-            self.params.N * self.params.K / 2
-            - np.sum(self.E_z_squared) / 2
-            + np.sum(log_eps(self.vi_var)) / 2
-        )
+# nodeFA_z is now imported from z_priors.StdNormal
+# nodeFA_w_m_not_sparse is now imported from w_priors.None
 
 
-class nodeFA_w_m_not_sparse:
-    """
-    Class to update variational params of W (no sparsity) (d times k, for one m)
-    """
-
-    def __init__(self, vi_mu, vi_var, m, params: FAParams):
-        self.params = params
-
-        self.m = m
-
-        self.vi_mu = vi_mu
-        self.vi_var = vi_var
-
-    def MB(self):
-        pass
-
-    def update_k(self, k, nominator, denominator):
-        self.vi_mu[:, k] = nominator / denominator
-        self.vi_var[:, k] = 1 / denominator
-
-
-class nodeFA_hat_w_m:
-    """
-    Class to update variational params of W_hat node
-    (sparsity: ARD) (d times k, for one m)
-    """
-
-    def __init__(self, vi_mu, vi_var, m, params: FAParams):
-        self.params = params
-
-        self.m = m
-
-        self.vi_mu = vi_mu
-        self.vi_var = vi_var
-
-    def MB(self):
-        pass
-
-    def update_k(self, k, nominator, denominator):
-        self.vi_mu[:, k] = nominator / denominator
-        self.vi_var[:, k] = 1 / denominator
-
-
-class nodeFA_s_m:
-    """
-    Class to update variational params of S node
-    (sparsity: SS - spike and slab) (d times k, for one m)
-    """
-
-    def __init__(self, vi_lambda, m, params: FAParams):
-        self.params = params
-
-        self.m = m
-
-        self.vi_lambda = vi_lambda
-        self.vi_gamma = 1 / (1 + np.exp(-vi_lambda))
-
-    def MB(self):
-        pass
-
-    def update_k(self, k, nominator, denominator, E_alpha, E_log_LR_theta):
-        lambda_k = (
-            E_log_LR_theta
-            + log_eps(E_alpha) / 2
-            + log_eps(denominator) / 2
-            + (nominator**2) / (2 * denominator)
-        )
-
-        # max value for lambda -> if it is reached, then P(S=1) = 1
-        # if np.any(lambda_k > -np.log(EPS)):
-        lambda_k[lambda_k > -np.log(EPS)] = -np.log(EPS)
-        # min value for lambda -> if it is reached, then P(S=1) = 1/D_m
-        # if np.any(lambda_k < np.log(self.D[self.m]-1)):
-        lambda_k[lambda_k < np.log(self.params.D[self.m] - 1)] = np.log(
-            self.params.D[self.m] - 1
-        )
-
-        self.vi_lambda[:, k] = lambda_k
-        self.vi_gamma[:, k] = 1 / (1 + np.exp(-lambda_k))
+# nodeFA_w_m_not_sparse is now imported from w_priors.None
+# nodeFA_hat_w_m is now imported from w_priors.ARD
+# nodeFA_s_m is now imported from w_priors.ARD_SS
 
 
 class nodeFA_w_m:
@@ -282,7 +100,8 @@ class nodeFA_w_m:
         for k in range(self.params.K):
             self.update_k(k)
 
-        if self.params.likelihoods[self.m] in [Likelihood.NORMAL, Likelihood.BERNOULLI]:
+        # Only CTM doesn't need tau updates - all FA likelihoods (Normal/Bernoulli) do
+        if self.params.likelihoods[self.m] != Likelihood.CTM:
             self.tau_m_node.update_params_w_z()
 
     def update_k(self, k):
@@ -485,124 +304,8 @@ class nodeFA_w_m:
         self.elbo = elbo
 
 
-class nodeFA_alpha_m:
-    """
-    Class to define alpha node (k, for one m)
-    """
-
-    def __init__(self, a0, b0, m, params: FAParams):
-        self.params = params
-
-        self.m = m
-
-        self.a0 = a0
-        self.b0 = b0
-
-        # start from E_alpha = 1
-        # update of vi_a:
-        self.vi_a = a0 + self.params.D[m] * np.ones(self.params.K) / 2
-        self.vi_b = self.vi_a.copy()
-
-        self.update_all_params()
-
-        self.elbo = 0
-
-    def MB(self, hat_w_m_node, s_m_node, w_m_node):
-        self.hat_w_m_node = hat_w_m_node
-        self.s_m_node = s_m_node
-        self.w_m_node = w_m_node
-
-    def update_k(self, k):
-        self.vi_b[k] = self.b0 + np.sum(self.w_m_node.E_hat_w_squared[:, k]) / 2
-
-        # alpha small -> w_hat big TBD - check
-        if self.vi_a[k] / self.vi_b[k] < EPS:
-            self.vi_b[k] = self.vi_a[k] / EPS
-        # alpha big -> w_hat small and potentially not significant
-        if self.vi_b[k] / (self.vi_a[k] - 1) < EPS:
-            self.vi_b[k] = (self.vi_a[k] - 1) * EPS
-
-        self.update_params()
-
-    def update_params(self):
-        self.E_alpha = self.vi_a / self.vi_b
-        self.E_inv_alpha = self.vi_b / (self.vi_a - 1)
-        self.E_log_alpha = -log_eps(self.vi_b) + self.digamma_vi_a
-
-    def update_all_params(self):
-        # including params that are const.
-        self.log_gamma_a0 = gammaln(self.a0)
-        self.log_gamma_vi_a = gammaln(self.vi_a)
-        self.digamma_vi_a = digamma(self.vi_a)
-
-        self.update_params()
-
-        self.kl_const = -self.params.K * (self.log_gamma_a0) + self.params.K * (
-            self.a0 * log_eps(self.b0)
-        )
-        self.entropy_const = (
-            np.sum(self.vi_a)
-            + np.sum(self.log_gamma_vi_a)
-            + np.sum((1 - self.vi_a) * self.digamma_vi_a)
-        )
-
-    def ELBO(self):
-        kl = (
-            self.kl_const
-            + (self.a0 - 1) * np.sum(self.E_log_alpha)
-            - self.b0 * np.sum(self.E_alpha)
-        )
-        entropy = self.entropy_const - np.sum(log_eps(self.vi_b))
-        self.elbo = kl + entropy
-
-
-class nodeFA_theta_m:
-    """
-    Class to define theta node (k, for one m)
-    """
-
-    def __init__(self, a0, b0, vi_a, vi_b, m, params: FAParams):
-        self.params = params
-
-        self.m = m
-
-        self.a0 = a0
-        self.b0 = b0
-
-        self.vi_a = vi_a
-        self.vi_b = vi_b
-
-        self.update_params()
-
-        self.elbo = 0
-
-    def MB(self, s_m_node):
-        self.s_m_node = s_m_node
-
-    def update_k(self, k):
-        sum_sdk = np.sum(self.s_m_node.vi_gamma[:, k])
-        self.vi_a[k] = self.a0 + sum_sdk
-        self.vi_b[k] = self.b0 - sum_sdk + self.params.D[self.m]
-
-        self.update_params()
-
-    def update_params(self):
-        self.E_log_theta = digamma(self.vi_a) - digamma(self.vi_a + self.vi_b)
-        self.E_log_1minustheta = digamma(self.vi_b) - digamma(self.vi_a + self.vi_b)
-        self.E_log_LR = self.E_log_theta - self.E_log_1minustheta
-
-    def ELBO(self):
-        kl = (
-            np.sum((self.a0 - 1) * self.E_log_theta)
-            + np.sum((self.b0 - 1) * self.E_log_1minustheta)
-            - np.sum(betaln(self.a0, self.b0))
-        )
-        entropy = (
-            -np.sum((self.vi_a - 1) * self.E_log_theta)
-            - np.sum((self.vi_b - 1) * self.E_log_1minustheta)
-            + np.sum(betaln(self.vi_a, self.vi_b))
-        )
-        self.elbo = kl + entropy
+# nodeFA_alpha_m is now imported from w_priors.ARD
+# nodeFA_theta_m is now imported from w_priors.ARD_SS
 
 
 class nodeFA_tau_m:
@@ -787,6 +490,7 @@ class FA:
         Z_priors,
         W_priors,
         starting_params=None,
+        view_configs=None,
         *args,
         **kwargs,
     ):
@@ -798,6 +502,7 @@ class FA:
         self.likelihoods = likelihoods
         self.Z_priors = Z_priors
         self.W_priors = W_priors
+        self.view_configs = view_configs  # ViewConfig objects for each view
 
         # Create shared parameters object
         self.params = FAParams(
@@ -842,19 +547,29 @@ class FA:
             key_tmp = "M" + str(m)
             data_m = data[key_tmp]
 
-            if self.likelihoods[m] == Likelihood.NORMAL:
-                data_m = np.array(data_m)
-                data_m = np.ma.array(data_m, mask=np.isnan(data_m))
-                feature_mean_m = np.ma.mean(data_m, axis=0)
-                node_y_m = nodeFA_y_m(data_m - feature_mean_m, m, params=self.params)
-                node_y_m.data_mean = feature_mean_m
-            if self.likelihoods[m] == Likelihood.BERNOULLI:
-                data_m = np.array(data_m)
-                data_m = np.ma.array(data_m, mask=np.isnan(data_m))
-                node_y_m = nodeFA_y_m(data_m, m, params=self.params)
-                node_y_m.data_mean = None
-            if self.likelihoods[m] == Likelihood.CTM:
-                node_y_m = nodeFA_y_m(None, m, params=self.params)
+            # Create y node using view_config if available, otherwise check if CTM
+            if self.view_configs is not None:
+                # Use ViewConfig to create y node (handles Normal/Bernoulli/CTM)
+                node_y_m = self.view_configs[m].create_y_node(data_m, m, self.params)
+            else:
+                # Fallback for backward compatibility - only distinguish CTM from FA
+                from FACTMpy.FA_model import nodeFA_y_m
+
+                if self.likelihoods[m] == Likelihood.CTM:
+                    node_y_m = nodeFA_y_m(None, m, params=self.params)
+                else:
+                    # For FA likelihoods (Normal/Bernoulli), treat them the same
+                    # Both Normal and Bernoulli use the same FA structure
+                    import numpy as np
+
+                    data_m = np.array(data_m)
+                    data_m = np.ma.array(data_m, mask=np.isnan(data_m))
+                    # Default to Normal behavior (centering) for backward compatibility
+                    feature_mean_m = np.ma.mean(data_m, axis=0)
+                    node_y_m = nodeFA_y_m(
+                        data_m - feature_mean_m, m, params=self.params
+                    )
+                    node_y_m.data_mean = feature_mean_m
             self.nodelist_y.append(node_y_m)
 
             if self.W_priors[m] == WPrior.NONE:
@@ -931,9 +646,9 @@ class FA:
         for m in range(self.M):
             self.nodelist_w[m].update()
 
-        # update tau by m
+        # update tau by m - only for FA likelihoods, not CTM
         for m in range(self.M):
-            if self.likelihoods[m] in [Likelihood.NORMAL, Likelihood.BERNOULLI]:
+            if self.likelihoods[m] != Likelihood.CTM:
                 self.nodelist_tau[m].update()
 
     def ELBO(self):
@@ -945,7 +660,7 @@ class FA:
                 self.nodelist_theta[m].ELBO()
             if self.W_priors[m] in [WPrior.ARD, WPrior.ARD_SS]:
                 self.nodelist_alpha[m].ELBO()
-            if self.likelihoods[m] in [Likelihood.NORMAL, Likelihood.BERNOULLI]:
+            if self.likelihoods[m] != Likelihood.CTM:
                 self.nodelist_tau[m].ELBO()
 
                 self.nodelist_y[m].ELBO()
@@ -959,7 +674,7 @@ class FA:
                 elbo += self.nodelist_theta[m].elbo
             if self.W_priors[m] in [WPrior.ARD, WPrior.ARD_SS]:
                 elbo += self.nodelist_alpha[m].elbo
-            if self.likelihoods[m] in [Likelihood.NORMAL, Likelihood.BERNOULLI]:
+            if self.likelihoods[m] != Likelihood.CTM:
                 elbo += self.nodelist_tau[m].elbo
             elbo += self.nodelist_y[m].elbo
 

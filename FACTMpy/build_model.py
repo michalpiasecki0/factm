@@ -39,6 +39,9 @@ class FACTModel(FACTM):
             self.likelihoods,
             self.z_priors,
             self.w_priors,
+            starting_params_fa=None,
+            starting_params_ctm=None,
+            view_configs=self.model_config.view_configs,
         )
 
         self.__first_fit = True

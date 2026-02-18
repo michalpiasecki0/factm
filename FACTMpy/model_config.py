@@ -95,6 +95,38 @@ class ViewConfig:
         self.w_prior = w_prior
         self.L = L
 
+    def create_y_node(self, data_m, m, params):
+        """
+        Create a y node for this view's likelihood.
+
+        Args:
+            data_m: Data for view m
+            m: View index
+            params: FAParams object
+
+        Returns:
+            nodeFA_y_m instance
+        """
+        from FACTMpy.FA_model import nodeFA_y_m
+
+        if self.likelihood == Likelihood.CTM:
+            # CTM views don't use standard y node in FA
+            return nodeFA_y_m(None, m, params=params)
+        else:
+            # For FA likelihoods (Normal, Bernoulli), create y node
+            # Normal and Bernoulli are handled the same way in FA
+            from likelihoods.fa.Bernoulli import BernoulliLikelihood
+            from likelihoods.fa.Normal import NormalLikelihood
+
+            if self.likelihood == Likelihood.NORMAL:
+                likelihood_obj = NormalLikelihood()
+                return likelihood_obj.create_y_node(data_m, m, params)
+            elif self.likelihood == Likelihood.BERNOULLI:
+                likelihood_obj = BernoulliLikelihood()
+                return likelihood_obj.create_y_node(data_m, m, params)
+            else:
+                raise ValueError(f"Unknown FA likelihood: {self.likelihood}")
+
 
 @dataclass
 class ModelConfig:

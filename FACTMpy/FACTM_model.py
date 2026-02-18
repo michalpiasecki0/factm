@@ -44,6 +44,8 @@ class FACTM:
         self.G = G
 
         # create FA
+        # Extract view_configs from kwargs if provided
+        view_configs = kwargs.pop("view_configs", None)
         self.fa = FA(
             data,
             N,
@@ -54,7 +56,8 @@ class FACTM:
             Z_priors,
             W_priors,
             starting_params_fa,
-            *args,
+            view_configs=view_configs,
+            *args,  # noqa: B026
             **kwargs,
         )
 
