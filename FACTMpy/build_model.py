@@ -42,6 +42,7 @@ class FACTModel(FACTM):
             starting_params_fa=None,
             starting_params_ctm=None,
             view_configs=self.model_config.view_configs,
+            model_config=self.model_config,
         )
 
         self.__first_fit = True

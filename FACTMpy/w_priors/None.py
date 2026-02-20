@@ -4,7 +4,8 @@ No sparsity prior for weights (W_prior = None).
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from w_priors.base import WPriorBase
+
+from FACTMpy.w_priors.base import WPriorBase
 
 if TYPE_CHECKING:
     from FACTMpy.FA_model import FAParams, nodeFA_w_m
@@ -56,9 +57,12 @@ class NoneWPrior(WPriorBase):
         self, w_node: "nodeFA_w_m", k: int, z_node: Any, y_node: Any, tau_node: Any
     ):
         """Update W node for factor k for None prior."""
-        likelihood = w_node.likelihood
+        from FACTMpy.model_config import Likelihood
 
-        if likelihood.should_update_tau_after_w():
+        # Check if this is a CTM likelihood or FA likelihood
+        is_ctm = w_node.params.likelihoods[w_node.m] == Likelihood.CTM
+
+        if not is_ctm:
             # For Normal/Bernoulli likelihoods
             # sum_j!=k <z_nk><z_nj><w_jd>
             nominator_second_term = np.dot(w_node.E_w, z_node.E_z.T) - np.outer(

@@ -115,8 +115,8 @@ class ViewConfig:
         else:
             # For FA likelihoods (Normal, Bernoulli), create y node
             # Normal and Bernoulli are handled the same way in FA
-            from likelihoods.fa.Bernoulli import BernoulliLikelihood
-            from likelihoods.fa.Normal import NormalLikelihood
+            from FACTMpy.likelihoods.fa.Bernoulli import BernoulliLikelihood
+            from FACTMpy.likelihoods.fa.Normal import NormalLikelihood
 
             if self.likelihood == Likelihood.NORMAL:
                 likelihood_obj = NormalLikelihood()
@@ -126,6 +126,17 @@ class ViewConfig:
                 return likelihood_obj.create_y_node(data_m, m, params)
             else:
                 raise ValueError(f"Unknown FA likelihood: {self.likelihood}")
+
+    def create_w_prior(self):
+        """
+        Create a W prior object for this view.
+
+        Returns:
+            WPriorBase instance
+        """
+        from FACTMpy.w_priors.factory import create_w_prior
+
+        return create_w_prior(self.w_prior)
 
 
 @dataclass
@@ -179,3 +190,14 @@ class ModelConfig:
                     )
                 L_values.append(config.L)
         return L_values
+
+    def create_z_priors(self):
+        """
+        Create Z prior objects for all factors.
+
+        Returns:
+            List of ZPriorBase instances
+        """
+        from FACTMpy.z_priors.factory import create_z_priors
+
+        return create_z_priors(self.z_priors)

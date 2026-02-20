@@ -4,7 +4,8 @@ Normal likelihood implementation for Factor Analysis.
 from typing import TYPE_CHECKING
 
 import numpy as np
-from likelihoods.base import LikelihoodBase
+
+from FACTMpy.likelihoods.base import LikelihoodBase
 
 if TYPE_CHECKING:
     from FACTMpy.FA_model import (
