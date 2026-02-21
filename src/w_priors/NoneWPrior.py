@@ -5,12 +5,13 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from FACTMpy.w_priors.base import WPriorBase
+from .base import WPriorBase
 
 if TYPE_CHECKING:
-    from FACTMpy.FA_model import FAParams, nodeFA_w_m
+    from ..FA_model import FAParams, nodeFA_w_m
 
-from FACTMpy.utils import log_eps
+from ..model_config import Likelihood
+from ..utils import log_eps
 
 
 class nodeFA_w_m_not_sparse:
@@ -39,7 +40,7 @@ class NoneWPrior(WPriorBase):
         self, m: int, params: "FAParams", starting_params: dict, D: int, K: int
     ) -> dict:
         """Create nodes for None prior."""
-        from FACTMpy.FA_model import starting_params_hat_w_m
+        from ..starting_params import starting_params_hat_w_m
 
         key_tmp = "M" + str(m)
         w_mu, w_var = starting_params_hat_w_m(starting_params, key_tmp, D, K)
@@ -57,8 +58,6 @@ class NoneWPrior(WPriorBase):
         self, w_node: "nodeFA_w_m", k: int, z_node: Any, y_node: Any, tau_node: Any
     ):
         """Update W node for factor k for None prior."""
-        from FACTMpy.model_config import Likelihood
-
         # Check if this is a CTM likelihood or FA likelihood
         is_ctm = w_node.params.likelihoods[w_node.m] == Likelihood.CTM
 

@@ -4,7 +4,7 @@ Pathways prior for weights (not yet implemented).
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from FACTMpy.FA_model import FAParams
+    from ..FA_model import FAParams
 
 
 class PathwaysWPrior:

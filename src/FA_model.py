@@ -1,20 +1,15 @@
 """
 This module provides Factor Analysis model with all the nodes.
 """
-import importlib
 from dataclasses import dataclass
 from typing import List
 
 import numpy as np
-from scipy.special import digamma, gammaln
 
-from FACTMpy.model_config import Likelihood
-from FACTMpy.utils import log_eps
-from FACTMpy.z_priors.StdNormal import nodeFA_z
-
-# Import None prior using importlib since "None" is a Python keyword
-_none_prior = importlib.import_module("FACTMpy.w_priors.None")
-nodeFA_w_m_not_sparse = _none_prior.nodeFA_w_m_not_sparse
+from .model_config import Likelihood
+from .nodes import nodeFA_tau_m, nodeFA_y_m
+from .w_priors.factory import create_w_prior
+from .z_priors.StdNormal import nodeFA_z
 
 EPS = 1e-20
 
@@ -30,15 +25,6 @@ class FAParams:
     likelihoods: List[str]
     Z_priors: List[str]
     W_priors: List[str]
-
-
-# nodeFA_z is now imported from FACTMpy.z_priors.StdNormal
-# nodeFA_w_m_not_sparse is now imported from FACTMpy.w_priors.None
-
-
-# nodeFA_w_m_not_sparse is now imported from FACTMpy.w_priors.None
-# nodeFA_hat_w_m is now imported from FACTMpy.w_priors.ARD
-# nodeFA_s_m is now imported from FACTMpy.w_priors.ARD_SS
 
 
 class nodeFA_w_m:
@@ -129,174 +115,10 @@ class nodeFA_w_m:
         self.elbo = self.w_prior.compute_elbo(self)
 
 
-# nodeFA_alpha_m is now imported from FACTMpy.w_priors.ARD
-# nodeFA_theta_m is now imported from FACTMpy.w_priors.ARD_SS
-
-
-class nodeFA_tau_m:
-    """
-    Class to define tau node (dim d, for one m)
-    """
-
-    def __init__(self, a0, b0, m, params: FAParams):
-        self.params = params
-
-        self.m = m
-
-        if not (self.params.likelihoods[self.m] == Likelihood.CTM):
-            self.a0 = a0
-            self.b0 = b0
-
-            self.E_resid_squared_half = 0
-
-            self.elbo = 0
-
-        if self.params.likelihoods[self.m] == Likelihood.CTM:
-            self.Sigma0_inv = np.eye(self.params.D[self.m])
-
-    def MB(self, y_m_node, w_m_node, z_node):
-        self.w_m_node = w_m_node
-        self.y_m_node = y_m_node
-        self.z_node = z_node
-
-        # we need MB for this, so it is here and not in init
-        if not (self.params.likelihoods[self.m] == Likelihood.CTM):
-            self.vi_a = (
-                self.a0 + (self.params.N - np.sum(self.y_m_node.data.mask, axis=0)) / 2
-            )
-            self.vi_b = self.vi_a.copy()
-            self.update_all_params()
-            self.update_params()
-
-    def update(self):
-        self.update_params_w_z()
-        self.vi_b = self.b0 + np.ma.sum(self.E_resid_squared_half, axis=0)
-
-        self.update_params()
-
-    def update_all_params(self):
-        self.log_gamma_a0 = gammaln(self.a0)
-        self.log_gamma_vi_a = gammaln(self.vi_a)
-        self.digamma_vi_a = digamma(self.vi_a)
-
-        # self.update_params()
-
-        self.kl_const = -self.params.D[self.m] * (self.log_gamma_a0) + self.params.D[
-            self.m
-        ] * (self.a0 * log_eps(self.b0))
-        self.entropy_cons = (
-            np.sum(self.vi_a)
-            + np.sum(self.log_gamma_vi_a)
-            + np.sum((1 - self.vi_a) * self.digamma_vi_a)
-        )
-
-    def update_params(self):
-        self.E_tau_1D = self.vi_a / self.vi_b
-        self.E_tau = np.ma.array(
-            np.outer(np.ones(self.params.N), self.E_tau_1D),
-            mask=self.y_m_node.data.mask,
-        )
-
-        self.E_log_tau_1D = -log_eps(self.vi_b) + self.digamma_vi_a
-        self.E_log_tau = np.ma.array(
-            np.outer(np.ones(self.params.N), self.E_log_tau_1D),
-            mask=self.y_m_node.data.mask,
-        )
-
-    def update_params_w_z(self):
-        # d x n, sum over n
-
-        # <(y_nd - \sum_k z_nk w_kd)**2>/2
-        third_term_of_tau = (
-            np.ma.array(self.w_m_node.E_w_z_squared, mask=self.y_m_node.data.mask) / 2
-        )
-        first_term_of_tau = self.y_m_node.data**2 / 2
-        second_term_of_tau = -self.y_m_node.data * self.w_m_node.E_w_z
-
-        self.E_resid_squared_half = (
-            first_term_of_tau + second_term_of_tau + third_term_of_tau
-        )
-
-    def ELBO(self):
-        kl = (
-            self.kl_const
-            + (self.a0 - 1) * np.sum(self.E_log_tau_1D)
-            - self.b0 * np.sum(self.E_tau_1D)
-        )
-        entropy = self.entropy_cons - np.sum(log_eps(self.vi_b))
-        self.elbo = kl + entropy
-
-
-class nodeFA_y_m:
-    def __init__(self, data_n, m, params: FAParams):
-        self.params = params
-
-        self.m = m
-
-        # there is no difference between data and data_original
-        # for likelihood == "normal"
-        # however, for likelihood == 'Bernoulli", data_original is 0/1 and data is
-        # an approximation used for updates
-        self.data = data_n
-        self.data_original = data_n
-
-        self.elbo = 0
-
-    def MB(self, w_m_node, tau_m_node):
-        self.w_m_node = w_m_node
-        self.tau_m_node = tau_m_node
-
-    def ELBO(self):
-        elbo = (
-            -(self.params.N * self.params.D[self.m] - np.sum(self.data.mask))
-            * log_eps(2 * np.pi)
-            / 2
-            + np.ma.sum(self.tau_m_node.E_log_tau) / 2
-            - np.ma.sum(self.tau_m_node.E_tau * self.tau_m_node.E_resid_squared_half)
-        )
-        self.elbo = elbo
-
-
-def starting_params_z(starting_params, N, K):
-    if "z_mu" in starting_params.keys():
-        z_mean = 1 * starting_params["z_mu"]
-    else:
-        z_mean = np.random.normal(size=(N, K))
-
-    if "z_var" in starting_params.keys():
-        z_var = starting_params["z_var"]
-    else:
-        z_var = np.ones((N, K))
-
-    return z_mean, z_var
-
-
-def starting_params_hat_w_m(starting_params, key_M, D, K):
-    starting_params_m = starting_params[key_M]
-
-    if "w_mu" in starting_params_m.keys():
-        w_mean = 1 * starting_params_m["w_mu"]
-    else:
-        w_mean = np.random.normal(size=(D, K))
-
-    if "w_var" in starting_params_m.keys():
-        w_var = 1 * starting_params_m["w_var"]
-    else:
-        w_var = np.ones((D, K))
-
-    return w_mean, w_var
-
-
-def starting_params_s_m(starting_params, key_M, D, K):
-    starting_params_m = starting_params[key_M]
-
-    if "s_lambda" in starting_params_m.keys():
-        s_lambda = 1.0 * starting_params_m["s_lambda"]
-    else:
-        # start with p(s=1) > 0.999
-        s_lambda = 10.0 * np.ones((D, K))
-
-    return s_lambda
+# nodeFA_tau_m and nodeFA_y_m are now imported from .nodes
+# starting_params_* functions are now imported from .starting_params
+# nodeFA_alpha_m is now imported from .w_priors.ARD
+# nodeFA_theta_m is now imported from .w_priors.ARD_SS
 
 
 class FA:
@@ -350,6 +172,8 @@ class FA:
                 starting_params.update({"M" + str(m): dict()})
 
         # CREATING NODES:
+        from .starting_params import starting_params_z
+
         z_mean, z_var = starting_params_z(starting_params, self.N, self.K)
         # Create Z prior objects if model_config available
         z_prior_objs = None
@@ -386,15 +210,12 @@ class FA:
                 node_y_m = self.view_configs[m].create_y_node(data_m, m, self.params)
             else:
                 # Fallback for backward compatibility - only distinguish CTM from FA
-                from FACTMpy.FA_model import nodeFA_y_m
 
                 if self.likelihoods[m] == Likelihood.CTM:
                     node_y_m = nodeFA_y_m(None, m, params=self.params)
                 else:
                     # For FA likelihoods (Normal/Bernoulli), treat them the same
                     # Both Normal and Bernoulli use the same FA structure
-                    import numpy as np
-
                     data_m = np.array(data_m)
                     data_m = np.ma.array(data_m, mask=np.isnan(data_m))
                     # Default to Normal behavior (centering) for backward compatibility
@@ -419,8 +240,6 @@ class FA:
                 self.nodelist_theta.append(prior_nodes["theta_m_node"])
             else:
                 # Fallback for backward compatibility - create prior objects from enums
-                from FACTMpy.w_priors.factory import create_w_prior
-
                 w_prior_obj = create_w_prior(self.W_priors[m])
                 # Create nodes using prior object
                 prior_nodes = w_prior_obj.create_nodes(

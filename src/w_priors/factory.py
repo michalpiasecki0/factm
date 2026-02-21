@@ -1,16 +1,11 @@
 """
 Factory functions to create prior objects from enums.
 """
-import importlib
-
-from FACTMpy.model_config import WPrior
-from FACTMpy.w_priors.ARD import ARDWPrior
-from FACTMpy.w_priors.ARD_SS import ARD_SSWPrior
-from FACTMpy.w_priors.Pathways import PathwaysWPrior
-
-# Import None prior using importlib since "None" is a Python keyword
-_none_prior_module = importlib.import_module("FACTMpy.w_priors.None")
-NoneWPrior = _none_prior_module.NoneWPrior
+from ..model_config import WPrior
+from .ARD import ARDWPrior
+from .ARD_SS import ARD_SSWPrior
+from .NoneWPrior import NoneWPrior
+from .Pathways import PathwaysWPrior
 
 
 def create_w_prior(prior_enum: WPrior):

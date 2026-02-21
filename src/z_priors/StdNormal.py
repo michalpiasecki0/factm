@@ -5,13 +5,14 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from FACTMpy.model_config import Likelihood
-from FACTMpy.z_priors.base import ZPriorBase
+from ..model_config import Likelihood
+from .base import ZPriorBase
 
 if TYPE_CHECKING:
-    from FACTMpy.FA_model import FAParams
+    from ..FA_model import FAParams
 
-from FACTMpy.utils import log_eps
+from ..utils import log_eps
+from .Informed import InformedZPrior
 
 
 class nodeFA_z:
@@ -219,6 +220,4 @@ class StdNormalZPrior(ZPriorBase):
         if isinstance(z_priors[k], str):
             return z_priors[k] != "informed"
         # If z_priors[k] is an object, check its type
-        from FACTMpy.z_priors.Informed import InformedZPrior
-
         return not isinstance(z_priors[k], InformedZPrior)

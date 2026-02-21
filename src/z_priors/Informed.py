@@ -3,10 +3,10 @@ Informed prior for latent factors Z (not yet implemented).
 """
 from typing import TYPE_CHECKING
 
-from FACTMpy.z_priors.base import ZPriorBase
+from .base import ZPriorBase
 
 if TYPE_CHECKING:
-    from FACTMpy.FA_model import nodeFA_z
+    from ..FA_model import nodeFA_z
 
 
 class InformedZPrior(ZPriorBase):

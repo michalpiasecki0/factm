@@ -1,10 +1,10 @@
 """
 Factory functions to create likelihood objects from enums.
 """
-from FACTMpy.likelihoods.ctm.CTM import CTMLikelihood
-from FACTMpy.likelihoods.fa.Bernoulli import BernoulliLikelihood
-from FACTMpy.likelihoods.fa.Normal import NormalLikelihood
-from FACTMpy.model_config import Likelihood
+from ..model_config import Likelihood
+from .ctm.CTM import CTMLikelihood
+from .fa.Bernoulli import BernoulliLikelihood
+from .fa.Normal import NormalLikelihood
 
 
 def create_likelihood(likelihood_enum: Likelihood):

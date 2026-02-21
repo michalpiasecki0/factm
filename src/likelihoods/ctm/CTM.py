@@ -5,10 +5,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from FACTMpy.likelihoods.base import LikelihoodBase
+from ..base import LikelihoodBase
 
 if TYPE_CHECKING:
-    from FACTMpy.FA_model import (
+    from ...FA_model import (
         FAParams,
         nodeFA_tau_m,
         nodeFA_w_m,
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     )
 
 # Re-export CTM model classes for convenience
-from FACTMpy.CTM_model import (
+from ...CTM_model import (
     CTM,
     CTMParams,
     nodeCTM_beta,
@@ -48,14 +48,14 @@ class CTMLikelihood(LikelihoodBase):
 
     def create_y_node(self, data_m, m, params: "FAParams") -> "nodeFA_y_m":
         """Create a y node for CTM likelihood (placeholder for FA integration)."""
-        from FACTMpy.FA_model import nodeFA_y_m
+        from ...nodes import nodeFA_y_m
 
         # CTM views don't use the standard y node in FA
         return nodeFA_y_m(None, m, params=params)
 
     def create_tau_node(self, a0, b0, m, params: "FAParams") -> "nodeFA_tau_m":
         """Create a tau node for CTM likelihood."""
-        from FACTMpy.FA_model import nodeFA_tau_m
+        from ...nodes import nodeFA_tau_m
 
         return nodeFA_tau_m(a0, b0, m, params, likelihood=self)
 

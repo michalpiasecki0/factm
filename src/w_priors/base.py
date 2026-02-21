@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from FACTMpy.FA_model import FAParams, nodeFA_w_m
+    from ..FA_model import FAParams, nodeFA_w_m
 
 
 class WPriorBase(ABC):

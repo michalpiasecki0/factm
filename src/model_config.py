@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import List
 
+from .likelihoods.fa.Bernoulli import BernoulliLikelihood
+from .likelihoods.fa.Normal import NormalLikelihood
+
 
 class FA_Pretrain(Enum):
     """Supported FA pretrain types."""
@@ -107,7 +110,7 @@ class ViewConfig:
         Returns:
             nodeFA_y_m instance
         """
-        from FACTMpy.FA_model import nodeFA_y_m
+        from .nodes import nodeFA_y_m
 
         if self.likelihood == Likelihood.CTM:
             # CTM views don't use standard y node in FA
@@ -115,9 +118,6 @@ class ViewConfig:
         else:
             # For FA likelihoods (Normal, Bernoulli), create y node
             # Normal and Bernoulli are handled the same way in FA
-            from FACTMpy.likelihoods.fa.Bernoulli import BernoulliLikelihood
-            from FACTMpy.likelihoods.fa.Normal import NormalLikelihood
-
             if self.likelihood == Likelihood.NORMAL:
                 likelihood_obj = NormalLikelihood()
                 return likelihood_obj.create_y_node(data_m, m, params)
@@ -134,7 +134,7 @@ class ViewConfig:
         Returns:
             WPriorBase instance
         """
-        from FACTMpy.w_priors.factory import create_w_prior
+        from .w_priors.factory import create_w_prior
 
         return create_w_prior(self.w_prior)
 
@@ -198,6 +198,6 @@ class ModelConfig:
         Returns:
             List of ZPriorBase instances
         """
-        from FACTMpy.z_priors.factory import create_z_priors
+        from .z_priors.factory import create_z_priors
 
         return create_z_priors(self.z_priors)

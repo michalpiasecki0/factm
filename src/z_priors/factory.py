@@ -1,9 +1,9 @@
 """
 Factory functions to create Z prior objects from enums.
 """
-from FACTMpy.model_config import ZPrior
-from FACTMpy.z_priors.Informed import InformedZPrior
-from FACTMpy.z_priors.StdNormal import StdNormalZPrior
+from ..model_config import ZPrior
+from .Informed import InformedZPrior
+from .StdNormal import StdNormalZPrior
 
 
 def create_z_prior(prior_enum: ZPrior):
