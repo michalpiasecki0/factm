@@ -14,32 +14,7 @@ if TYPE_CHECKING:
         nodeFA_z,
     )
 
-# Re-export CTM model classes for convenience
-from ...CTM_model import (
-    CTM,
-    CTMParams,
-    nodeCTM_beta,
-    nodeCTM_eta,
-    nodeCTM_mu0,
-    nodeCTM_Sigma0,
-    nodeCTM_w_z,
-    nodeCTM_xi,
-    nodeCTM_y,
-)
 from ...nodes import nodeFA_tau_m, nodeFA_y_m
-
-__all__ = [
-    "CTM",
-    "CTMLikelihood",
-    "CTMParams",
-    "nodeCTM_beta",
-    "nodeCTM_eta",
-    "nodeCTM_mu0",
-    "nodeCTM_Sigma0",
-    "nodeCTM_w_z",
-    "nodeCTM_xi",
-    "nodeCTM_y",
-]
 
 
 class CTMLikelihood(LikelihoodBase):
