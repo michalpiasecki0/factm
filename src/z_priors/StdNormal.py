@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..model_config import Likelihood
+from ..enums import Likelihood
 from .base import ZPriorBase
 
 if TYPE_CHECKING:

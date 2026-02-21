@@ -1,7 +1,7 @@
 """
 Factory functions to create prior objects from enums.
 """
-from ..model_config import WPrior
+from ..enums import WPrior
 from .ARD import ARDWPrior
 from .ARD_SS import ARD_SSWPrior
 from .NoneWPrior import NoneWPrior

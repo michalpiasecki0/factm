@@ -5,8 +5,9 @@ from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
 
 from .CTM_model import CTM
+from .enums import FA_Pretrain, Likelihood, WPrior
 from .FACTM_model import FACTM
-from .model_config import FA_Pretrain, Likelihood, ModelConfig, WPrior
+from .model_config import ModelConfig
 
 
 class FACTModel(FACTM):

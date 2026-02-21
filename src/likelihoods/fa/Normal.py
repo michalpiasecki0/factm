@@ -10,11 +10,10 @@ from ..base import LikelihoodBase
 if TYPE_CHECKING:
     from ...FA_model import (
         FAParams,
-        nodeFA_tau_m,
         nodeFA_w_m,
-        nodeFA_y_m,
         nodeFA_z,
     )
+from ...nodes import nodeFA_tau_m, nodeFA_y_m
 
 
 class NormalLikelihood(LikelihoodBase):
@@ -22,7 +21,6 @@ class NormalLikelihood(LikelihoodBase):
 
     def create_y_node(self, data_m, m, params: "FAParams") -> "nodeFA_y_m":
         """Create a y node for Normal likelihood."""
-        from ...nodes import nodeFA_y_m
 
         data_m = np.array(data_m)
         data_m = np.ma.array(data_m, mask=np.isnan(data_m))
@@ -33,7 +31,6 @@ class NormalLikelihood(LikelihoodBase):
 
     def create_tau_node(self, a0, b0, m, params: "FAParams") -> "nodeFA_tau_m":
         """Create a tau node for Normal likelihood."""
-        from ...nodes import nodeFA_tau_m
 
         return nodeFA_tau_m(a0, b0, m, params, likelihood=self)
 

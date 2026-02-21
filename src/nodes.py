@@ -12,7 +12,7 @@ from scipy.special import digamma, gammaln
 if TYPE_CHECKING:
     from .FA_model import FAParams
 
-from .model_config import Likelihood
+from .enums import Likelihood
 from .utils import log_eps
 
 EPS = 1e-20

@@ -6,48 +6,14 @@ preventing bugs from typos and invalid values.
 """
 
 from dataclasses import dataclass
-from enum import Enum
 from typing import List
 
+from .enums import Likelihood, WPrior, ZPrior
 from .likelihoods.fa.Bernoulli import BernoulliLikelihood
 from .likelihoods.fa.Normal import NormalLikelihood
-
-
-class FA_Pretrain(Enum):
-    """Supported FA pretrain types."""
-
-    PCA = "PCA"
-    FA = "FA"
-
-
-class CTM_pretrain(Enum):
-    """Supported CTM pretrain types."""
-
-    CTM = "CTM"
-
-
-class Likelihood(Enum):
-    """Supported likelihood types for data views."""
-
-    NORMAL = "normal"
-    BERNOULLI = "Bernoulli"
-    CTM = "CTM"
-
-
-class WPrior(Enum):
-    """Supported weight prior types."""
-
-    NONE = "None"
-    ARD = "ARD"
-    ARD_SS = "ARD_SS"
-    PATHWAYS = "pathways"
-
-
-class ZPrior(Enum):
-    """Supported latent factor prior types."""
-
-    STD_NORMAL = "stdN"
-    INFORMED = "informed"
+from .nodes import nodeFA_y_m
+from .w_priors.factory import create_w_prior
+from .z_priors.factory import create_z_priors
 
 
 @dataclass
@@ -110,7 +76,6 @@ class ViewConfig:
         Returns:
             nodeFA_y_m instance
         """
-        from .nodes import nodeFA_y_m
 
         if self.likelihood == Likelihood.CTM:
             # CTM views don't use standard y node in FA
@@ -134,7 +99,6 @@ class ViewConfig:
         Returns:
             WPriorBase instance
         """
-        from .w_priors.factory import create_w_prior
 
         return create_w_prior(self.w_prior)
 
@@ -198,6 +162,5 @@ class ModelConfig:
         Returns:
             List of ZPriorBase instances
         """
-        from .z_priors.factory import create_z_priors
 
         return create_z_priors(self.z_priors)

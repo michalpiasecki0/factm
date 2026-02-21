@@ -1,7 +1,7 @@
 """
 Factory functions to create likelihood objects from enums.
 """
-from ..model_config import Likelihood
+from ..enums import Likelihood
 from .ctm.CTM import CTMLikelihood
 from .fa.Bernoulli import BernoulliLikelihood
 from .fa.Normal import NormalLikelihood

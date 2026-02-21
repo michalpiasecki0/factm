@@ -6,8 +6,9 @@ from typing import List
 
 import numpy as np
 
-from .model_config import Likelihood
+from .enums import Likelihood
 from .nodes import nodeFA_tau_m, nodeFA_y_m
+from .starting_params import starting_params_z
 from .w_priors.factory import create_w_prior
 from .z_priors.StdNormal import nodeFA_z
 
@@ -170,9 +171,6 @@ class FA:
         for m in range(M):
             if "M" + str(m) not in starting_params.keys():
                 starting_params.update({"M" + str(m): dict()})
-
-        # CREATING NODES:
-        from .starting_params import starting_params_z
 
         z_mean, z_var = starting_params_z(starting_params, self.N, self.K)
         # Create Z prior objects if model_config available

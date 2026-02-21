@@ -11,7 +11,8 @@ from .base import WPriorBase
 if TYPE_CHECKING:
     from ..FA_model import FAParams, nodeFA_w_m
 
-from ..model_config import Likelihood
+from ..enums import Likelihood
+from ..starting_params import starting_params_hat_w_m
 from ..utils import log_eps
 
 EPS = 1e-20
@@ -112,7 +113,6 @@ class ARDWPrior(WPriorBase):
         self, m: int, params: "FAParams", starting_params: dict, D: int, K: int
     ) -> dict:
         """Create nodes for ARD prior."""
-        from ..starting_params import starting_params_hat_w_m
 
         key_tmp = "M" + str(m)
         w_mu, w_var = starting_params_hat_w_m(starting_params, key_tmp, D, K)

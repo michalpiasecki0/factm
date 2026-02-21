@@ -1,7 +1,7 @@
 """
 Factory functions to create Z prior objects from enums.
 """
-from ..model_config import ZPrior
+from ..enums import ZPrior
 from .Informed import InformedZPrior
 from .StdNormal import StdNormalZPrior
 
