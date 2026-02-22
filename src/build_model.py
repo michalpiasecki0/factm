@@ -4,9 +4,10 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
 
-from FACTMpy.CTM_model import CTM
-from FACTMpy.FACTM_model import FACTM
-from FACTMpy.model_config import FA_Pretrain, Likelihood, ModelConfig, WPrior
+from .CTM_model import CTM
+from .enums import FA_Pretrain, Likelihood, WPrior
+from .FACTM_model import FACTM
+from .model_config import ModelConfig
 
 
 class FACTModel(FACTM):
@@ -39,6 +40,10 @@ class FACTModel(FACTM):
             self.likelihoods,
             self.z_priors,
             self.w_priors,
+            starting_params_fa=None,
+            starting_params_ctm=None,
+            view_configs=self.model_config.view_configs,
+            model_config=self.model_config,
         )
 
         self.__first_fit = True

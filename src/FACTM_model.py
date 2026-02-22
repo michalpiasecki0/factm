@@ -5,9 +5,9 @@ by joining FA and CTM parts.
 
 import numpy as np
 
-from FACTMpy.CTM_model import CTM
-from FACTMpy.FA_model import FA
-from FACTMpy.model_config import Likelihood
+from .CTM_model import CTM
+from .enums import Likelihood
+from .FA_model import FA
 
 
 class FACTM:
@@ -44,6 +44,9 @@ class FACTM:
         self.G = G
 
         # create FA
+        # Extract view_configs and model_config from kwargs if provided
+        view_configs = kwargs.pop("view_configs", None)
+        model_config = kwargs.pop("model_config", None)
         self.fa = FA(
             data,
             N,
@@ -54,7 +57,9 @@ class FACTM:
             Z_priors,
             W_priors,
             starting_params_fa,
-            *args,
+            view_configs=view_configs,
+            model_config=model_config,
+            *args,  # noqa: B026
             **kwargs,
         )
 
