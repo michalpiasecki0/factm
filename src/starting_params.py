@@ -22,9 +22,9 @@ def starting_params_z(starting_params, N, K):
     return z_mean, z_var
 
 
-def starting_params_hat_w_m(starting_params, key_M, D, K):
+def starting_params_hat_w_m(starting_params, m, D, K):
     """Initialize starting parameters for hat_w_m node."""
-    starting_params_m = starting_params[key_M]
+    starting_params_m = starting_params.get(m, {})
 
     if "w_mu" in starting_params_m.keys():
         w_mean = 1 * starting_params_m["w_mu"]
@@ -39,9 +39,9 @@ def starting_params_hat_w_m(starting_params, key_M, D, K):
     return w_mean, w_var
 
 
-def starting_params_s_m(starting_params, key_M, D, K):
+def starting_params_s_m(starting_params, m, D, K):
     """Initialize starting parameters for s_m node."""
-    starting_params_m = starting_params[key_M]
+    starting_params_m = starting_params.get(m, {})
 
     if "s_lambda" in starting_params_m.keys():
         s_lambda = 1.0 * starting_params_m["s_lambda"]

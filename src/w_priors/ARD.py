@@ -11,7 +11,6 @@ from .base import WPriorBase
 if TYPE_CHECKING:
     from ..FA_model import FAParams, nodeFA_w_m
 
-from ..enums import Likelihood
 from ..starting_params import starting_params_hat_w_m
 from ..utils import log_eps
 
@@ -24,9 +23,9 @@ class nodeFA_hat_w_m:
     (sparsity: ARD) (d times k, for one m)
     """
 
-    def __init__(self, vi_mu, vi_var, m, params: "FAParams"):
+    def __init__(self, vi_mu, vi_var, D: int, params: "FAParams"):
         self.params = params
-        self.m = m
+        self.D = D
         self.vi_mu = vi_mu
         self.vi_var = vi_var
 
@@ -43,15 +42,13 @@ class nodeFA_alpha_m:
     Class to define alpha node (k, for one m)
     """
 
-    def __init__(self, a0, b0, m, params: "FAParams"):
+    def __init__(self, a0, b0, D: int, params: "FAParams"):
         self.params = params
-        self.m = m
+        self.D = D
         self.a0 = a0
         self.b0 = b0
 
-        # start from E_alpha = 1
-        # update of vi_a:
-        self.vi_a = a0 + self.params.D[m] * np.ones(self.params.K) / 2
+        self.vi_a = a0 + self.D * np.ones(self.params.K) / 2
         self.vi_b = self.vi_a.copy()
 
         self.update_all_params()
@@ -114,10 +111,9 @@ class ARDWPrior(WPriorBase):
     ) -> dict:
         """Create nodes for ARD prior."""
 
-        key_tmp = "M" + str(m)
-        w_mu, w_var = starting_params_hat_w_m(starting_params, key_tmp, D, K)
-        node_hat_w_m = nodeFA_hat_w_m(w_mu, w_var, m, params=params)
-        node_alpha_m = nodeFA_alpha_m(1e-14, 1e-14, m, params=params)
+        w_mu, w_var = starting_params_hat_w_m(starting_params, m, D, K)
+        node_hat_w_m = nodeFA_hat_w_m(w_mu, w_var, D, params=params)
+        node_alpha_m = nodeFA_alpha_m(1e-14, 1e-14, D, params=params)
 
         return {
             "w_m_node_not_sparse": None,
@@ -131,7 +127,7 @@ class ARDWPrior(WPriorBase):
         self, w_node: "nodeFA_w_m", k: int, z_node: Any, y_node: Any, tau_node: Any
     ):
         """Update W node for factor k for ARD prior."""
-        if w_node.params.likelihoods[w_node.m] != Likelihood.CTM:
+        if not w_node.is_ctm:
             # For FA likelihoods (Normal/Bernoulli)
             nominator_second_term_tmp = np.dot(
                 w_node.E_w, z_node.E_z.T * z_node.E_z[:, k]
@@ -175,7 +171,7 @@ class ARDWPrior(WPriorBase):
             nominator = term3 - term1 - term2
 
             denominator = np.diag(
-                w_node.alpha_m_node.E_alpha[k] * np.eye(w_node.params.D[w_node.m])
+                w_node.alpha_m_node.E_alpha[k] * np.eye(w_node.D)
                 + np.sum(z_node.E_z_squared[:, k]) * (tau_node.Sigma0_inv)
             )
             w_node.hat_w_m_node.update_k(k, nominator, denominator)
@@ -192,8 +188,8 @@ class ARDWPrior(WPriorBase):
     def compute_elbo(self, w_node: "nodeFA_w_m") -> float:
         """Compute ELBO for ARD prior."""
         return (
-            w_node.params.D[w_node.m] * w_node.params.K / 2
-            + w_node.params.D[w_node.m] * np.sum(w_node.alpha_m_node.E_log_alpha) / 2
+            w_node.D * w_node.params.K / 2
+            + w_node.D * np.sum(w_node.alpha_m_node.E_log_alpha) / 2
             - np.sum(w_node.alpha_m_node.E_alpha * w_node.E_w_squared) / 2
             + np.sum(log_eps(w_node.hat_w_m_node.vi_var)) / 2
         )

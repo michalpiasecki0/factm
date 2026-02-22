@@ -13,7 +13,6 @@ from .base import WPriorBase
 if TYPE_CHECKING:
     from ..FA_model import FAParams, nodeFA_w_m
 
-from ..enums import Likelihood
 from ..starting_params import starting_params_hat_w_m, starting_params_s_m
 from ..utils import log_eps, xlogx
 
@@ -26,11 +25,9 @@ class nodeFA_s_m:
     (sparsity: SS - spike and slab) (d times k, for one m)
     """
 
-    def __init__(self, vi_lambda, m, params: "FAParams"):
+    def __init__(self, vi_lambda, D: int, params: "FAParams"):
         self.params = params
-
-        self.m = m
-
+        self.D = D
         self.vi_lambda = vi_lambda
         self.vi_gamma = 1 / (1 + np.exp(-vi_lambda))
 
@@ -50,9 +47,7 @@ class nodeFA_s_m:
         lambda_k[lambda_k > -np.log(EPS)] = -np.log(EPS)
         # min value for lambda -> if it is reached, then P(S=1) = 1/D_m
         # if np.any(lambda_k < np.log(self.D[self.m]-1)):
-        lambda_k[lambda_k < np.log(self.params.D[self.m] - 1)] = np.log(
-            self.params.D[self.m] - 1
-        )
+        lambda_k[lambda_k < np.log(self.D - 1)] = np.log(self.D - 1)
 
         self.vi_lambda[:, k] = lambda_k
         self.vi_gamma[:, k] = 1 / (1 + np.exp(-lambda_k))
@@ -63,10 +58,9 @@ class nodeFA_theta_m:
     Class to define theta node (k, for one m)
     """
 
-    def __init__(self, a0, b0, vi_a, vi_b, m, params: "FAParams"):
+    def __init__(self, a0, b0, vi_a, vi_b, D: int, params: "FAParams"):
         self.params = params
-
-        self.m = m
+        self.D = D
 
         self.a0 = a0
         self.b0 = b0
@@ -84,7 +78,7 @@ class nodeFA_theta_m:
     def update_k(self, k):
         sum_sdk = np.sum(self.s_m_node.vi_gamma[:, k])
         self.vi_a[k] = self.a0 + sum_sdk
-        self.vi_b[k] = self.b0 - sum_sdk + self.params.D[self.m]
+        self.vi_b[k] = self.b0 - sum_sdk + self.D
 
         self.update_params()
 
@@ -115,15 +109,14 @@ class ARD_SSWPrior(WPriorBase):
     ) -> dict:
         """Create nodes for ARD_SS prior."""
 
-        key_tmp = "M" + str(m)
-        w_mu, w_var = starting_params_hat_w_m(starting_params, key_tmp, D, K)
-        node_hat_w_m = nodeFA_hat_w_m(w_mu, w_var, m, params=params)
-        node_alpha_m = nodeFA_alpha_m(1e-14, 1e-14, m, params=params)
+        w_mu, w_var = starting_params_hat_w_m(starting_params, m, D, K)
+        node_hat_w_m = nodeFA_hat_w_m(w_mu, w_var, D, params=params)
+        node_alpha_m = nodeFA_alpha_m(1e-14, 1e-14, D, params=params)
 
-        s_lambda = starting_params_s_m(starting_params, key_tmp, D, K)
-        node_s = nodeFA_s_m(s_lambda, m, params=params)
+        s_lambda = starting_params_s_m(starting_params, m, D, K)
+        node_s = nodeFA_s_m(s_lambda, D, params=params)
         node_theta_m = nodeFA_theta_m(
-            1, 1, 99 * np.ones(K), np.ones(K), m, params=params
+            1, 1, 99 * np.ones(K), np.ones(K), D, params=params
         )
 
         return {
@@ -138,7 +131,7 @@ class ARD_SSWPrior(WPriorBase):
         self, w_node: "nodeFA_w_m", k: int, z_node: Any, y_node: Any, tau_node: Any
     ):
         """Update W node for factor k for ARD_SS prior."""
-        if w_node.params.likelihoods[w_node.m] != Likelihood.CTM:
+        if not w_node.is_ctm:
             # For FA likelihoods (Normal/Bernoulli)
             nominator_second_term_tmp = np.dot(
                 w_node.E_w, z_node.E_z.T * z_node.E_z[:, k]
@@ -189,7 +182,7 @@ class ARD_SSWPrior(WPriorBase):
             w_node.hat_w_m_node.vi_var + w_node.hat_w_m_node.vi_mu**2
         ) + (1 - w_node.s_m_node.vi_gamma) * (
             np.outer(
-                np.ones(w_node.params.D[w_node.m]),
+                np.ones(w_node.D),
                 w_node.alpha_m_node.E_inv_alpha,
             )
         )
@@ -208,7 +201,7 @@ class ARD_SSWPrior(WPriorBase):
             - np.sum(xlogx(1 - w_node.s_m_node.vi_gamma))
         )
         elbo_w_hat = (
-            w_node.params.D[w_node.m] * np.sum(w_node.alpha_m_node.E_log_alpha) / 2
+            w_node.D * np.sum(w_node.alpha_m_node.E_log_alpha) / 2
             - (
                 np.sum(
                     np.dot(

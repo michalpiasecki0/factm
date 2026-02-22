@@ -10,7 +10,6 @@ from .base import WPriorBase
 if TYPE_CHECKING:
     from ..FA_model import FAParams, nodeFA_w_m
 
-from ..enums import Likelihood
 from ..starting_params import starting_params_hat_w_m
 from ..utils import log_eps
 
@@ -20,9 +19,9 @@ class nodeFA_w_m_not_sparse:
     Class to update variational params of W (no sparsity) (d times k, for one m)
     """
 
-    def __init__(self, vi_mu, vi_var, m, params: "FAParams"):
+    def __init__(self, vi_mu, vi_var, D: int, params: "FAParams"):
         self.params = params
-        self.m = m
+        self.D = D
         self.vi_mu = vi_mu
         self.vi_var = vi_var
 
@@ -42,9 +41,8 @@ class NoneWPrior(WPriorBase):
     ) -> dict:
         """Create nodes for None prior."""
 
-        key_tmp = "M" + str(m)
-        w_mu, w_var = starting_params_hat_w_m(starting_params, key_tmp, D, K)
-        node_w_m_not_sparse = nodeFA_w_m_not_sparse(w_mu, w_var, m, params=params)
+        w_mu, w_var = starting_params_hat_w_m(starting_params, m, D, K)
+        node_w_m_not_sparse = nodeFA_w_m_not_sparse(w_mu, w_var, D, params=params)
 
         return {
             "w_m_node_not_sparse": node_w_m_not_sparse,
@@ -59,7 +57,7 @@ class NoneWPrior(WPriorBase):
     ):
         """Update W node for factor k for None prior."""
         # Check if this is a CTM likelihood or FA likelihood
-        is_ctm = w_node.params.likelihoods[w_node.m] == Likelihood.CTM
+        is_ctm = w_node.is_ctm
 
         if not is_ctm:
             # For Normal/Bernoulli likelihoods
@@ -96,7 +94,7 @@ class NoneWPrior(WPriorBase):
             nominator = term3 - term1 - term2
 
             denominator = np.diag(
-                np.eye(w_node.params.D[w_node.m])
+                np.eye(w_node.D)
                 + np.sum(z_node.E_z_squared[:, k]) * (tau_node.Sigma0_inv)
             )
             w_node.w_m_node_not_sparse.update_k(k, nominator, denominator)
@@ -113,7 +111,7 @@ class NoneWPrior(WPriorBase):
     def compute_elbo(self, w_node: "nodeFA_w_m") -> float:
         """Compute ELBO for None prior."""
         return (
-            w_node.params.D[w_node.m] * w_node.params.K / 2
+            w_node.D * w_node.params.K / 2
             - np.sum(w_node.E_w_squared) / 2
             + np.sum(log_eps(w_node.w_m_node_not_sparse.vi_var)) / 2
         )
