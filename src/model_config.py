@@ -1,8 +1,11 @@
 """
-Model configuration enums and types for FACTM.
+Model configuration for FACTM.
 
-This module provides type-safe enums for likelihoods and priors,
-preventing bugs from typos and invalid values.
+ViewConfig is split into SimpleViewConfig (Normal/Bernoulli) and
+StructuredViewConfig (CTM) so the type system enforces the distinction
+instead of runtime Likelihood checks.
+
+ModelConfig holds the two lists separately, mirroring the Views container.
 """
 
 from dataclasses import dataclass
@@ -11,156 +14,142 @@ from typing import List
 from .enums import Likelihood, WPrior, ZPrior
 from .likelihoods.fa.Bernoulli import BernoulliLikelihood
 from .likelihoods.fa.Normal import NormalLikelihood
-from .nodes import nodeFA_y_m
 from .w_priors.factory import create_w_prior
 from .z_priors.factory import create_z_priors
 
+# ---------------------------------------------------------------------------
+# Per-view configuration objects
+# ---------------------------------------------------------------------------
+
 
 @dataclass
-class ViewConfig:
+class SimpleViewConfig:
     """
-    Configuration for a single data view.
+    Configuration for a single Normal or Bernoulli FA view.
 
-    Bundles together all view-specific settings to prevent
-    errors from separate lists getting out of sync.
-
-    For CTM views, L (number of topics/niches) must be provided.
-    For other views, L should be None.
+    Attributes
+    ----------
+    likelihood: Likelihood.NORMAL or Likelihood.BERNOULLI
+    w_prior:    WPrior enum value
     """
 
     likelihood: Likelihood
     w_prior: WPrior
-    L: int | None = None  # Number of topics for CTM views
 
-    def __post_init__(self):
-        """Validate that CTM views have L specified."""
-        is_ctm = self.likelihood == Likelihood.CTM
-        has_L = self.L is not None
-
-        if is_ctm != has_L:
+    def __post_init__(self) -> None:
+        if self.likelihood == Likelihood.CTM:
             raise ValueError(
-                f"L must be specified if and only if likelihood is CTM. "
-                f"Got likelihood={self.likelihood.value}, L={self.L}"
+                "SimpleViewConfig does not support CTM likelihood. "
+                "Use StructuredViewConfig instead."
             )
 
-    def __init__(
-        self,
-        likelihood: Likelihood,
-        w_prior: WPrior,
-        L: int | None = None,
-    ):
-        """
-        Initialize ViewConfig.
-
-        Args:
-            likelihood: Likelihood
-            w_prior: WPrior
-            L: Number of topics for CTM views (required if likelihood is CTM)
-
-        Returns:
-            None
-        """
-        self.likelihood = likelihood
-        self.w_prior = w_prior
-        self.L = L
-
     def create_y_node(self, data_m, m, params):
-        """
-        Create a y node for this view's likelihood.
-
-        Args:
-            data_m: Data for view m
-            m: View index
-            params: FAParams object
-
-        Returns:
-            nodeFA_y_m instance
-        """
-
-        if self.likelihood == Likelihood.CTM:
-            # CTM views don't use standard y node in FA
-            return nodeFA_y_m(None, m, params=params)
+        """Create the FA y node for this view."""
+        if self.likelihood == Likelihood.NORMAL:
+            return NormalLikelihood().create_y_node(data_m, m, params)
+        elif self.likelihood == Likelihood.BERNOULLI:
+            return BernoulliLikelihood().create_y_node(data_m, m, params)
         else:
-            # For FA likelihoods (Normal, Bernoulli), create y node
-            # Normal and Bernoulli are handled the same way in FA
-            if self.likelihood == Likelihood.NORMAL:
-                likelihood_obj = NormalLikelihood()
-                return likelihood_obj.create_y_node(data_m, m, params)
-            elif self.likelihood == Likelihood.BERNOULLI:
-                likelihood_obj = BernoulliLikelihood()
-                return likelihood_obj.create_y_node(data_m, m, params)
-            else:
-                raise ValueError(f"Unknown FA likelihood: {self.likelihood}")
+            raise ValueError(f"Unknown FA likelihood: {self.likelihood}")
 
     def create_w_prior(self):
-        """
-        Create a W prior object for this view.
-
-        Returns:
-            WPriorBase instance
-        """
-
+        """Return a WPriorBase instance for this view."""
         return create_w_prior(self.w_prior)
+
+
+@dataclass
+class StructuredViewConfig:
+    """
+    Configuration for a single CTM (structured) view.
+
+    Attributes
+    ----------
+    w_prior: WPrior enum value
+    L:       number of topics / niches
+    """
+
+    w_prior: WPrior
+    L: int
+
+    @property
+    def likelihood(self) -> Likelihood:
+        """Always CTM — kept for interface consistency."""
+        return Likelihood.CTM
+
+    def create_w_prior(self):
+        """Return a WPriorBase instance for this view."""
+        return create_w_prior(self.w_prior)
+
+
+# ---------------------------------------------------------------------------
+# Top-level model configuration
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class ModelConfig:
     """
-    Complete model configuration bundling all view and factor settings.
+    Complete model configuration.
 
-    This structure ensures consistency and makes the number of views explicit.
+    Holds simple-view configs and structured-view configs as separate lists,
+    mirroring the :class:`~views.Views` container and eliminating M-indexed
+    mixed lists throughout the codebase.
+
+    Attributes
+    ----------
+    simple_view_configs:     list of SimpleViewConfig (one per simple view)
+    structured_view_configs: list of StructuredViewConfig (one per CTM view)
+    z_priors:                list of ZPrior (one per latent factor)
     """
 
-    view_configs: List[ViewConfig]
+    simple_view_configs: List[SimpleViewConfig]
+    structured_view_configs: List[StructuredViewConfig]
     z_priors: List[ZPrior]
 
-    def __post_init__(self):
-        """Validate configuration after initialization."""
-        if len(self.view_configs) == 0:
-            raise ValueError("Must have at least one view configuration")
-        if len(self.z_priors) == 0:
-            raise ValueError("Must have at least one Z_prior")
+    def __post_init__(self) -> None:
+        if not self.simple_view_configs and not self.structured_view_configs:
+            raise ValueError("Must have at least one view configuration.")
+        if not self.z_priors:
+            raise ValueError("Must have at least one Z prior.")
+
+        self.configs_combined = self.simple_view_configs + self.structured_view_configs
+
+    # ------------------------------------------------------------------
+    # Convenience accessors
+    # ------------------------------------------------------------------
 
     @property
-    def num_views(self) -> int:
-        """Number of data views."""
-        return len(self.view_configs)
+    def num_simple(self) -> int:
+        return len(self.simple_view_configs)
+
+    @property
+    def num_structured(self) -> int:
+        return len(self.structured_view_configs)
 
     @property
     def num_factors(self) -> int:
-        """Number of latent factors."""
         return len(self.z_priors)
+
+    # Kept for backward-compatibility with FACTM/FA internals that still
+    # iterate over a flat list indexed by m.
+    @property
+    def view_configs(self) -> list:
+        """Flat list: simple configs first, then structured configs."""
+        return self.configs_combined
 
     @property
     def likelihoods(self) -> List[Likelihood]:
-        """Extract likelihoods from view configs (for backward compatibility)."""
-        return [config.likelihood for config in self.view_configs]
+        return [c.likelihood for c in self.configs_combined]
 
     @property
     def w_priors(self) -> List[WPrior]:
-        """Extract W_priors from view configs (for backward compatibility)."""
-        return [config.w_prior for config in self.view_configs]
+        return [c.w_prior for c in self.configs_combined]
 
     @property
     def L(self) -> List[int]:
-        """Extract L values from CTM view configs."""
-        L_values = []
-        for config in self.view_configs:
-            if config.likelihood == Likelihood.CTM:
-                if config.L is None:
-                    raise ValueError(
-                        "CTM view missing L value. "
-                        "This should have been caught during validation."
-                    )
-                L_values.append(config.L)
-        return L_values
+        """L values for CTM views only."""
+        return [c.L for c in self.structured_view_configs]
 
     def create_z_priors(self):
-        """
-        Create Z prior objects for all factors.
-
-        Returns:
-            List of ZPriorBase instances
-        """
-
+        """Create Z prior objects for all factors."""
         return create_z_priors(self.z_priors)

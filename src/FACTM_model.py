@@ -1,145 +1,151 @@
 """
-This module provides Factor Analysis with Correlated Topic Model
-by joining FA and CTM parts.
+Factor Analysis with Correlated Topic Model (FACTM).
+
+Joins the FA part (over simple views) with one CTM per structured view.
+All M-string indexing is gone; simple and structured views are iterated
+over their own lists independently.
 """
 
-import numpy as np
-
 from .CTM_model import CTM
-from .enums import Likelihood
 from .FA_model import FA
+from .model_config import ModelConfig
+from .nodes import nodeFA_tau_m, nodeFA_y_m
+from .views import Views
 
 
 class FACTM:
     """
-    Class to define Factor Analysis with Correlated Topic Model.
+    Factor Analysis with Correlated Topic Model.
+
+    Parameters
+    ----------
+    views:        Views container with .simple and .structured lists
+    K:            number of latent factors
+    model_config: ModelConfig with simple_view_configs and
+                  structured_view_configs
+    starting_params_fa:  optional dict for FA initialisation
+    starting_params_ctm: optional list[dict], one per structured view
     """
 
     def __init__(
         self,
-        data,
-        N,
-        M,
-        K,
-        D,
-        G,
-        likelihoods,
-        Z_priors,
-        W_priors,
+        views: Views,
+        K: int,
+        model_config: ModelConfig,
         starting_params_fa=None,
         starting_params_ctm=None,
-        *args,
-        **kwargs,
     ):
-        self.likelihoods = likelihoods
-        self.Z_priors = Z_priors
-        self.W_priors = W_priors
+        self.views = views
+        self.K = K
+        self.model_config = model_config
 
-        self.N = N
-        self.M = M
-        self.D = D
-        # Numbers of niches (topics) in not observed modalities
-        self.L = [D[m] for m in range(M) if self.likelihoods[m] == Likelihood.CTM]
-        # Numbers of types (e.g. cell types, words) in not observed modalities
-        self.G = G
+        self.N = views.N
 
-        # create FA
-        # Extract view_configs and model_config from kwargs if provided
-        view_configs = kwargs.pop("view_configs", None)
-        model_config = kwargs.pop("model_config", None)
+        # ------------------------------------------------------------------
+        # FA — operates on simple views only
+        # ------------------------------------------------------------------
         self.fa = FA(
-            data,
-            N,
-            M,
-            K,
-            D,
-            likelihoods,
-            Z_priors,
-            W_priors,
-            starting_params_fa,
-            view_configs=view_configs,
+            views=views,
+            K=K,
             model_config=model_config,
-            *args,  # noqa: B026
-            **kwargs,
+            starting_params=starting_params_fa,
         )
 
-        # create all CTMs
-        self.M_CTM = np.sum(np.array(self.likelihoods) == Likelihood.CTM)
-        self.index_CTM = np.where(np.array(self.likelihoods) == Likelihood.CTM)[0]
-        self.key_CTM = [
-            "M" + str(m) for m in range(M) if self.likelihoods[m] == Likelihood.CTM
-        ]
+        # ------------------------------------------------------------------
+        # CTMs — one per structured view
+        # ------------------------------------------------------------------
+        num_structured = views.num_structured
 
         if starting_params_ctm is None:
-            starting_params_ctm = []
-            for _ in range(self.M_CTM):
-                starting_params_ctm.append({})
-        self.ctm_list = dict()
-        for m_ctm in range(self.M_CTM):
-            self.ctm_list[self.key_CTM[m_ctm]] = CTM(
-                data[self.key_CTM[m_ctm]],
-                self.N,
-                self.L[m_ctm],
-                self.G[m_ctm],
-                K,
-                starting_params_ctm[m_ctm],
+            starting_params_ctm = [{} for _ in range(num_structured)]
+
+        # For each structured view we:
+        #   1. Build a CTM object
+        #   2. Inject a proxy y/tau node into FA so Z sees the eta signal
+        #   3. Record the FA node-list index so we can sync parameters later
+        self.ctms: list[CTM] = []
+        self._fa_indices: list[int] = []  # FA nodelist index per structured view
+
+        for structured_view, cfg, starting_param_ctm in zip(
+            views.structured,
+            model_config.structured_view_configs,
+            starting_params_ctm,
+            strict=True,
+        ):
+            ctm = CTM(
+                data=structured_view.data,
+                N=self.N,
+                L=cfg.L,
+                G=structured_view.G,
+                K=K,
+                starting_params=starting_param_ctm,
+            )
+            self.ctms.append(ctm)
+
+            # Proxy y node carries eta − mu0 from this CTM into FA
+            proxy_y = nodeFA_y_m(
+                data_n=ctm.node_eta.E_eta_minus_mu0,
+                m=None,
+                params=self.fa.params,
+                D=cfg.L,
             )
 
-            # data is structered use eta minus mu0 values in FA
-            self.fa.nodelist_y[self.index_CTM[m_ctm]].data = self.ctm_list[
-                self.key_CTM[m_ctm]
-            ].node_eta.E_eta_minus_mu0
+            w_prior_obj = cfg.create_w_prior()
+
+            fa_idx = self.fa.inject_structured_view(
+                y_node=proxy_y,
+                tau_node=nodeFA_tau_m(
+                    0.001, 0.001, m=None, params=self.fa.params, D=cfg.L, is_ctm=True
+                ),
+                w_prior=w_prior_obj,
+                starting_params={},
+                D_m=cfg.L,
+            )
+            self._fa_indices.append(fa_idx)
+
+    # ------------------------------------------------------------------
+    # MB
+    # ------------------------------------------------------------------
 
     def MB(self):
         self.fa.MB()
+        for ctm in self.ctms:
+            ctm.MB()
 
-        for m_ctm in range(self.M_CTM):
-            self.ctm_list[self.key_CTM[m_ctm]].MB()
+    # ------------------------------------------------------------------
+    # Update
+    # ------------------------------------------------------------------
 
     def update(self):
+        # 1. Update FA (Z and simple-view W nodes)
         self.fa.update()
 
-        for m_ctm in range(self.M_CTM):
-            # update parameters of CTM shared with FA
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w = self.fa.nodelist_w[
-                self.index_CTM[m_ctm]
-            ].E_w.copy()
-            self.ctm_list[
-                self.key_CTM[m_ctm]
-            ].node_w_z.E_w_squared = self.fa.nodelist_w[
-                self.index_CTM[m_ctm]
-            ].E_w_squared.copy()
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_z = self.fa.node_z.E_z.copy()
-            self.ctm_list[
-                self.key_CTM[m_ctm]
-            ].node_w_z.E_z_squared = self.fa.node_z.E_z_squared
-            self.ctm_list[self.key_CTM[m_ctm]].node_w_z.E_w_z = self.fa.nodelist_w[
-                self.index_CTM[m_ctm]
-            ].E_w_z.copy()
-            self.ctm_list[
-                self.key_CTM[m_ctm]
-            ].node_w_z.E_w_z_squared = self.fa.nodelist_w[
-                self.index_CTM[m_ctm]
-            ].E_w_z_squared.copy()
+        # 2. Sync FA → CTM and update each CTM
+        for ctm, fa_idx in zip(self.ctms, self._fa_indices, strict=True):
+            w_node_fa = self.fa.nodelist_w[fa_idx]
 
-            # update CTM parameters
-            self.ctm_list[self.key_CTM[m_ctm]].update()
+            # Push current FA estimates of W and Z into the CTM's w_z node
+            ctm.node_w_z.E_w = w_node_fa.E_w.copy()
+            ctm.node_w_z.E_w_squared = w_node_fa.E_w_squared.copy()
+            ctm.node_w_z.E_z = self.fa.node_z.E_z.copy()
+            ctm.node_w_z.E_z_squared = self.fa.node_z.E_z_squared
+            ctm.node_w_z.E_w_z = w_node_fa.E_w_z.copy()
+            ctm.node_w_z.E_w_z_squared = w_node_fa.E_w_z_squared.copy()
 
-            # update FA parameters based on CTM
-            self.fa.nodelist_y[self.index_CTM[m_ctm]].data = self.ctm_list[
-                self.key_CTM[m_ctm]
-            ].node_eta.E_eta_minus_mu0.copy()
-            self.fa.nodelist_tau[self.index_CTM[m_ctm]].Sigma0_inv = self.ctm_list[
-                self.key_CTM[m_ctm]
-            ].node_Sigma0.Sigma0.copy()
+            ctm.update()
+
+            # 3. Push CTM outputs back into FA's proxy nodes
+            self.fa.nodelist_y[fa_idx].data = ctm.node_eta.E_eta_minus_mu0.copy()
+            self.fa.nodelist_tau[fa_idx].Sigma0_inv = ctm.node_Sigma0.Sigma0.copy()
+
+    # ------------------------------------------------------------------
+    # ELBO
+    # ------------------------------------------------------------------
 
     def ELBO(self):
         self.fa.ELBO()
+        for ctm in self.ctms:
+            ctm.ELBO()
 
-        for m_ctm in range(self.M_CTM):
-            self.ctm_list[self.key_CTM[m_ctm]].ELBO()
-
-    def get_elbo(self):
-        return self.fa.elbo + np.sum(
-            [self.ctm_list[self.key_CTM[m_ctm]].elbo for m_ctm in range(self.M_CTM)]
-        )
+    def get_elbo(self) -> float:
+        return self.fa.elbo + sum(ctm.elbo for ctm in self.ctms)

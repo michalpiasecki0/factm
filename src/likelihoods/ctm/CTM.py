@@ -22,14 +22,13 @@ class CTMLikelihood(LikelihoodBase):
 
     def create_y_node(self, data_m, m, params: "FAParams") -> "nodeFA_y_m":
         """Create a y node for CTM likelihood (placeholder for FA integration)."""
-
-        # CTM views don't use the standard y node in FA
-        return nodeFA_y_m(None, m, params=params)
+        D = params.D[m] if m is not None else 0
+        return nodeFA_y_m(None, m, params=params, D=D)
 
     def create_tau_node(self, a0, b0, m, params: "FAParams") -> "nodeFA_tau_m":
         """Create a tau node for CTM likelihood."""
-
-        return nodeFA_tau_m(a0, b0, m, params, likelihood=self)
+        D = params.D[m] if m is not None else 0
+        return nodeFA_tau_m(a0, b0, m, params, D=D, is_ctm=True)
 
     def update_w_k_for_likelihood(
         self, w_node: "nodeFA_w_m", k: int, z_node: "nodeFA_z", tau_node: "nodeFA_tau_m"

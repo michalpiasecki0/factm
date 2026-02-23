@@ -12,7 +12,6 @@ from scipy.special import digamma, gammaln
 if TYPE_CHECKING:
     from .FA_model import FAParams
 
-from .enums import Likelihood
 from .utils import log_eps
 
 EPS = 1e-20
@@ -23,13 +22,15 @@ class nodeFA_tau_m:
     Class to define tau node (dim d, for one m)
     """
 
-    def __init__(self, a0, b0, m, params: "FAParams", likelihood=None):
+    def __init__(
+        self, a0, b0, m, params: "FAParams", D: int = None, is_ctm: bool = False
+    ):
         self.params = params
-        self.likelihood = likelihood
-
         self.m = m
+        self.D = D if D is not None else (params.D[m] if m is not None else 0)
+        self.is_ctm = is_ctm
 
-        if not (self.params.likelihoods[self.m] == Likelihood.CTM):
+        if not self.is_ctm:
             self.a0 = a0
             self.b0 = b0
 
@@ -37,8 +38,8 @@ class nodeFA_tau_m:
 
             self.elbo = 0
 
-        if self.params.likelihoods[self.m] == Likelihood.CTM:
-            self.Sigma0_inv = np.eye(self.params.D[self.m])
+        if self.is_ctm:
+            self.Sigma0_inv = np.eye(self.D)
 
     def MB(self, y_m_node, w_m_node, z_node):
         self.w_m_node = w_m_node
@@ -46,9 +47,14 @@ class nodeFA_tau_m:
         self.z_node = z_node
 
         # we need MB for this, so it is here and not in init
-        if not (self.params.likelihoods[self.m] == Likelihood.CTM):
+        if not self.is_ctm:
             self.vi_a = (
-                self.a0 + (self.params.N - np.sum(self.y_m_node.data.mask, axis=0)) / 2
+                self.a0
+                + (
+                    self.params.N
+                    - np.sum(np.ma.getmaskarray(self.y_m_node.data), axis=0)
+                )
+                / 2
             )
             self.vi_b = self.vi_a.copy()
             self.update_all_params()
@@ -67,9 +73,9 @@ class nodeFA_tau_m:
 
         # self.update_params()
 
-        self.kl_const = -self.params.D[self.m] * (self.log_gamma_a0) + self.params.D[
-            self.m
-        ] * (self.a0 * log_eps(self.b0))
+        self.kl_const = -self.D * (self.log_gamma_a0) + self.D * (
+            self.a0 * log_eps(self.b0)
+        )
         self.entropy_cons = (
             np.sum(self.vi_a)
             + np.sum(self.log_gamma_vi_a)
@@ -77,16 +83,17 @@ class nodeFA_tau_m:
         )
 
     def update_params(self):
+        mask = np.ma.getmaskarray(self.y_m_node.data)
         self.E_tau_1D = self.vi_a / self.vi_b
         self.E_tau = np.ma.array(
             np.outer(np.ones(self.params.N), self.E_tau_1D),
-            mask=self.y_m_node.data.mask,
+            mask=mask,
         )
 
         self.E_log_tau_1D = -log_eps(self.vi_b) + self.digamma_vi_a
         self.E_log_tau = np.ma.array(
             np.outer(np.ones(self.params.N), self.E_log_tau_1D),
-            mask=self.y_m_node.data.mask,
+            mask=mask,
         )
 
     def update_params_w_z(self):
@@ -94,7 +101,10 @@ class nodeFA_tau_m:
 
         # <(y_nd - \sum_k z_nk w_kd)**2>/2
         third_term_of_tau = (
-            np.ma.array(self.w_m_node.E_w_z_squared, mask=self.y_m_node.data.mask) / 2
+            np.ma.array(
+                self.w_m_node.E_w_z_squared, mask=np.ma.getmaskarray(self.y_m_node.data)
+            )
+            / 2
         )
         first_term_of_tau = self.y_m_node.data**2 / 2
         second_term_of_tau = -self.y_m_node.data * self.w_m_node.E_w_z
@@ -114,15 +124,11 @@ class nodeFA_tau_m:
 
 
 class nodeFA_y_m:
-    def __init__(self, data_n, m, params: "FAParams"):
+    def __init__(self, data_n, m, params: "FAParams", D: int = None):
         self.params = params
-
         self.m = m
+        self.D = D if D is not None else (params.D[m] if m is not None else 0)
 
-        # there is no difference between data and data_original
-        # for likelihood == "normal"
-        # however, for likelihood == 'Bernoulli", data_original is 0/1 and data is
-        # an approximation used for updates
         self.data = data_n
         self.data_original = data_n
 
@@ -134,7 +140,7 @@ class nodeFA_y_m:
 
     def ELBO(self):
         elbo = (
-            -(self.params.N * self.params.D[self.m] - np.sum(self.data.mask))
+            -(self.params.N * self.D - np.sum(np.ma.getmaskarray(self.data)))
             * log_eps(2 * np.pi)
             / 2
             + np.ma.sum(self.tau_m_node.E_log_tau) / 2

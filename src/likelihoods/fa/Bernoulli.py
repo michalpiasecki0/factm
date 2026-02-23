@@ -21,17 +21,17 @@ class BernoulliLikelihood(LikelihoodBase):
 
     def create_y_node(self, data_m, m, params: "FAParams") -> "nodeFA_y_m":
         """Create a y node for Bernoulli likelihood."""
-
         data_m = np.array(data_m)
         data_m = np.ma.array(data_m, mask=np.isnan(data_m))
-        node_y_m = nodeFA_y_m(data_m, m, params=params)
+        D = data_m.shape[1]
+        node_y_m = nodeFA_y_m(data_m, m, params=params, D=D)
         node_y_m.data_mean = None
         return node_y_m
 
     def create_tau_node(self, a0, b0, m, params: "FAParams") -> "nodeFA_tau_m":
         """Create a tau node for Bernoulli likelihood."""
-
-        return nodeFA_tau_m(a0, b0, m, params, likelihood=self)
+        D = params.D[m] if m is not None else 0
+        return nodeFA_tau_m(a0, b0, m, params, D=D, is_ctm=False)
 
     def update_w_k_for_likelihood(
         self, w_node: "nodeFA_w_m", k: int, z_node: "nodeFA_z", tau_node: "nodeFA_tau_m"

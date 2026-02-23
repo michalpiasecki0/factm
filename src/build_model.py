@@ -1,3 +1,11 @@
+"""
+High-level entry point: FACTModel.
+
+Accepts a :class:`~views.Views` container and a :class:`~model_config.ModelConfig`
+instead of the old ``{"M0": ..., "M1": ...}`` dict + flat config lists.
+All M-string indexing has been removed.
+"""
+
 import numpy as np
 from sklearn.decomposition import PCA, FactorAnalysis
 from sklearn.impute import SimpleImputer
@@ -5,151 +13,178 @@ from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
 
 from .CTM_model import CTM
-from .enums import FA_Pretrain, Likelihood, WPrior
+from .enums import FA_Pretrain, WPrior
 from .FACTM_model import FACTM
 from .model_config import ModelConfig
+from .views import Views
 
 
 class FACTModel(FACTM):
+    """
+    Convenience wrapper around FACTM that adds pre-training and fitting helpers.
+
+    Parameters
+    ----------
+    views:        :class:`~views.Views` with .simple and .structured lists
+    K:            number of latent factors
+    model_config: :class:`~model_config.ModelConfig`
+    seed:         optional random seed
+    """
+
     def __init__(
         self,
-        data,
-        K,
+        views: Views,
+        K: int,
         model_config: ModelConfig,
-        seed=None,
-        *args,
-        **kwargs,
+        seed: int | None = None,
     ):
         if seed is not None:
             self.seed = seed
-            np.random.seed(self.seed)
+            np.random.seed(seed)
 
         self.K = K
-        self.data = data
+        self.views = views
         self.model_config = model_config
 
-        self.__assign_params()
+        # Validate consistency between views and config
+        if views.num_simple != model_config.num_simple:
+            raise ValueError(
+                f"Number of simple views in data ({views.num_simple}) must match "
+                f"model_config ({model_config.num_simple})."
+            )
+        if views.num_structured != model_config.num_structured:
+            raise ValueError(
+                f"Number of structured views in data ({views.num_structured}) must "
+                f"match model_config ({model_config.num_structured})."
+            )
+        if model_config.num_factors != K:
+            raise ValueError(
+                f"model_config has {model_config.num_factors} Z priors but K={K}."
+            )
 
-        super(FACTModel, self).__init__(
-            data,
-            self.N,
-            self.M,
-            self.K,
-            self.D,
-            self.G,
-            self.likelihoods,
-            self.z_priors,
-            self.w_priors,
-            starting_params_fa=None,
-            starting_params_ctm=None,
-            view_configs=self.model_config.view_configs,
-            model_config=self.model_config,
+        super().__init__(
+            views=views,
+            K=K,
+            model_config=model_config,
         )
 
         self.__first_fit = True
-
         self.elbo_sequence = []
 
-    def pretrain(self, FA_pretrain=FA_Pretrain.PCA, CTM_pretrain=Likelihood.CTM):
-        if FA_pretrain not in [FA_Pretrain.PCA, FA_Pretrain.FA]:
-            raise TypeError(
-                "Pretraining for FA part should be one of FA_Pretrain enum values"
+    # ------------------------------------------------------------------
+    # Pre-training
+    # ------------------------------------------------------------------
+
+    def pretrain(
+        self,
+        FA_pretrain: FA_Pretrain = FA_Pretrain.PCA,
+    ) -> None:
+        """Pre-train CTMs then initialise FA weights via PCA or sklearn FA."""
+        if FA_pretrain not in (FA_Pretrain.PCA, FA_Pretrain.FA):
+            raise TypeError("FA_pretrain must be one of the FA_Pretrain enum values.")
+
+        # 1. Pre-train each CTM independently
+        for i, (sv, ctm) in enumerate(zip(self.views.structured, self.ctms)):
+            print(f"Pretraining CTM for structured view {i}")
+
+            tmp_ctm = CTM(
+                data=sv.data,
+                N=self.N,
+                L=ctm.L,
+                G=ctm.G,
+                K=self.fa.K,
+                FA=False,
             )
-        if CTM_pretrain != CTM_pretrain.CTM:
-            raise TypeError(
-                "Pretraining for CTM part should be one of CTM_pretrain enum values"
+            tmp_ctm.MB()
+            for _ in range(5):
+                tmp_ctm.update()
+
+            tmp_ctm.FA = True
+            self.ctms[i] = tmp_ctm
+
+            # Push updated eta signal into FA's proxy y node
+            fa_idx = self._fa_indices[i]
+            self.fa.nodelist_y[fa_idx].data = (
+                tmp_ctm.node_eta.vi_mu - tmp_ctm.node_mu0.mu0
             )
 
-        if CTM_pretrain == CTM_pretrain.CTM:
-            for m in range(self.M):
-                if self.likelihoods[m] == Likelihood.CTM:
-                    print("Pretraining CTM for a modality " + str(m))
-
-                    mod_ctm_tmp = CTM(
-                        self.ctm_list["M" + str(m)].node_y.data,
-                        self.N,
-                        self.ctm_list["M" + str(m)].L,
-                        self.ctm_list["M" + str(m)].G,
-                        self.fa.K,
-                        FA=False,
-                    )
-
-                    mod_ctm_tmp.MB()
-
-                    for _ in range(5):
-                        mod_ctm_tmp.update()
-
-                    mod_ctm_tmp.FA = True
-                    self.ctm_list["M" + str(m)] = mod_ctm_tmp
-
-                    self.fa.nodelist_y[m].data = (
-                        self.ctm_list["M" + str(m)].node_eta.vi_mu
-                        - self.ctm_list["M" + str(m)].node_mu0.mu0
-                    )
-
+        # 2. Pre-train FA weights with PCA / sklearn FactorAnalysis
         print("Pretraining FA")
 
-        if FA_pretrain == FA_Pretrain.PCA:
-            modFA = PCA(n_components=self.fa.K, whiten=True)
-        if FA_pretrain == FA_Pretrain.FA:
-            modFA = FactorAnalysis(n_components=self.fa.K)
-
-        # scaled and centered data
-        if CTM_pretrain == CTM_pretrain.CTM:
-            data_tmp = []
-
-            for m in range(self.M):
-                data_tmp_m = self.fa.nodelist_y[m].data
-                data_tmp.append(
-                    (data_tmp_m - np.nanmean(data_tmp_m, axis=0))
-                    / np.nanstd(data_tmp_m, axis=0)
-                )
-            data_tmp = np.hstack(data_tmp)
-
-        D_tmp = [self.D[m] for m in range(self.M)]
+        # Collect and standardise all view data (simple + CTM proxy)
+        data_parts = []
+        for m in range(len(self.fa.nodelist_y)):
+            d = self.fa.nodelist_y[m].data
+            data_parts.append(
+                (d - np.nanmean(d, axis=0)) / (np.nanstd(d, axis=0) + 1e-10)
+            )
+        data_combined = np.hstack(data_parts)
 
         imp = SimpleImputer(missing_values=np.nan, strategy="mean")
-        data_tmp = imp.fit_transform(data_tmp)
-        modFA.fit(data_tmp)
+        data_combined = imp.fit_transform(data_combined)
 
-        views_segments = [0] + np.cumsum(np.array(D_tmp)).tolist()
-        loadings_tmp = modFA.components_.T
-        latent_factors_tmp = modFA.transform(data_tmp)
+        if FA_pretrain == FA_Pretrain.PCA:
+            reducer = PCA(n_components=self.fa.K, whiten=True)
+        else:
+            reducer = FactorAnalysis(n_components=self.fa.K)
 
-        for m in range(self.M):
-            # get weights + scale back according to the variance of the features
-            if self.w_priors[m] in [WPrior.ARD, WPrior.ARD_SS]:
-                self.fa.nodelist_hat_w[m].vi_mu = (
-                    np.std(self.fa.nodelist_y[m].data, axis=0)
-                    * loadings_tmp[views_segments[m] : views_segments[m + 1], :].T
-                ).T
-            if self.w_priors[m] == WPrior.NONE:
-                self.fa.nodelist_w_not_sparse[m].vi_mu = (
-                    np.std(self.fa.nodelist_y[m].data, axis=0)
-                    * loadings_tmp[views_segments[m] : views_segments[m + 1], :].T
-                ).T
+        reducer.fit(data_combined)
+        loadings_all = reducer.components_.T  # (total_D, K)
+        latent_factors = reducer.transform(data_combined)
 
-        # scale to [-1, 1] as in MOFA
+        # Distribute loadings back to per-view W nodes
+        D_cumsum = [0] + list(
+            np.cumsum(
+                [
+                    self.fa.nodelist_y[m].data.shape[1]
+                    for m in range(len(self.fa.nodelist_y))
+                ]
+            )
+        )
+
+        for m in range(len(self.fa.nodelist_w)):
+            loadings_m = loadings_all[D_cumsum[m] : D_cumsum[m + 1], :]
+            std_m = np.std(self.fa.nodelist_y[m].data, axis=0)
+
+            cfg = (
+                self.model_config.simple_view_configs[m]
+                if m < self.views.num_simple
+                else self.model_config.structured_view_configs[
+                    m - self.views.num_simple
+                ]
+            )
+
+            if cfg.w_prior in (WPrior.ARD, WPrior.ARD_SS):
+                self.fa.nodelist_hat_w[m].vi_mu = (std_m * loadings_m.T).T
+            elif cfg.w_prior == WPrior.NONE:
+                self.fa.nodelist_w_not_sparse[m].vi_mu = (std_m * loadings_m.T).T
+
+        # Initialise Z
         min_max_scaler = MinMaxScaler((-1, 1))
-        self.fa.node_z.vi_mu = min_max_scaler.fit_transform(latent_factors_tmp)
+        self.fa.node_z.vi_mu = min_max_scaler.fit_transform(latent_factors)
 
-    def fit(self, max_iter=1000, elbo_tres=0, pretrain=True):
+    # ------------------------------------------------------------------
+    # Fitting
+    # ------------------------------------------------------------------
+
+    def fit(
+        self,
+        max_iter: int = 1000,
+        elbo_tres: float = 0.0,
+        pretrain: bool = True,
+    ) -> None:
         if self.__first_fit:
             self.MB()
 
-            # pretrain
             if pretrain:
                 self.pretrain()
 
-            # elbo at start
-            # update to make sure all the params make sense
             self.update()
             self.ELBO()
             self.elbo_sequence.append(self.get_elbo())
 
         self.__first_fit = False
-
-        print("Fitting a model")
+        print("Fitting model")
 
         for _ in tqdm(range(max_iter)):
             self.update()
@@ -159,98 +194,50 @@ class FACTModel(FACTM):
             if self.elbo_sequence[-1] - self.elbo_sequence[-2] < elbo_tres:
                 break
 
+    # ------------------------------------------------------------------
     # Point estimators
-    def get_latent_factors(self):
+    # ------------------------------------------------------------------
+
+    def get_latent_factors(self) -> np.ndarray:
         return self.fa.node_z.vi_mu
 
-    def get_loadings(self, m):
-        return self.fa.nodelist_w[m].E_w
+    def get_loadings(self, view_idx: int) -> np.ndarray:
+        """Loadings for simple view at index ``view_idx``."""
+        return self.fa.nodelist_w[view_idx].E_w
 
-    def get_mu0(self, m):
-        return self.ctm_list["M" + str(m)].node_mu0.mu0
+    def get_mu0(self, structured_idx: int) -> np.ndarray:
+        return self.ctms[structured_idx].node_mu0.mu0
 
-    def get_Sigma0(self, m):
-        return self.ctm_list["M" + str(m)].node_Sigma0.Sigma0
+    def get_Sigma0(self, structured_idx: int) -> np.ndarray:
+        return self.ctms[structured_idx].node_Sigma0.Sigma0
 
-    def get_topics(self, m):
-        L_m = self.L[np.where(np.array(self.index_CTM) == m)[0][0]]
+    def get_topics(self, structured_idx: int) -> np.ndarray:
+        ctm = self.ctms[structured_idx]
+        L = ctm.L
         return np.array(
             [
-                self.ctm_list["M" + str(m)].node_beta.vi_alpha[l_from_L_m, :]
-                / np.sum(self.ctm_list["M" + str(m)].node_beta.vi_alpha[l_from_L_m, :])
-                for l_from_L_m in range(L_m)
+                ctm.node_beta.vi_alpha[li, :] / np.sum(ctm.node_beta.vi_alpha[li, :])
+                for li in range(L)
             ]
         )
 
-    def get_eta(self, m):
-        return self.ctm_list["M" + str(m)].node_eta.vi_mu
+    def get_eta(self, structured_idx: int) -> np.ndarray:
+        return self.ctms[structured_idx].node_eta.vi_mu
 
-    def get_eta_probabilities_of_topics(self, m):
-        L_m = self.L[np.where(np.array(self.index_CTM) == m)[0][0]]
-        prob_est = np.exp(self.get_eta(m))
-        prob_est = prob_est / np.outer(np.sum(prob_est, axis=1), np.ones(L_m))
-        return prob_est
+    def get_eta_probabilities_of_topics(self, structured_idx: int) -> np.ndarray:
+        ctm = self.ctms[structured_idx]
+        prob = np.exp(self.get_eta(structured_idx))
+        return prob / np.outer(np.sum(prob, axis=1), np.ones(ctm.L))
 
-    def get_probabilities_of_topics(self, m):
-        return self.ctm_list["M" + str(m)].node_xi.vi_par
+    def get_probabilities_of_topics(self, structured_idx: int) -> np.ndarray:
+        return self.ctms[structured_idx].node_xi.vi_par
 
-    def get_clusters(self, m):
+    def get_clusters(self, structured_idx: int) -> list:
         return [
-            np.argmax(self.ctm_list["M" + str(m)].node_xi.vi_par[n], axis=1)
+            np.argmax(self.ctms[structured_idx].node_xi.vi_par[n], axis=1)
             for n in range(self.N)
         ]
 
-    def get_predictions_FA(self, m):
-        return self.fa.nodelist_w[m].E_w_z
-
-    def __assign_params(self):
-        """Extract parameters from model_config."""
-        # Validate number of views matches data
-        self.M = len(self.data)
-        if self.model_config.num_views != self.M:
-            raise ValueError(
-                f"Number of views in model_config ({self.model_config.num_views}) "
-                f"must match number of views in data ({self.M})"
-            )
-
-        # Validate number of factors
-        if self.model_config.num_factors != self.K:
-            raise ValueError(
-                f"Number of factors in model_config ({self.model_config.num_factors}) "
-                f"must match K ({self.K})"
-            )
-
-        # Extract likelihoods and W_priors from model_config
-        # Convert to strings for backward compatibility with FACTM/FA classes
-        self.likelihoods = self.model_config.likelihoods
-        self.w_priors = self.model_config.w_priors
-        self.z_priors = self.model_config.z_priors
-
-        # Extract L values from CTM view configs
-        self.L = self.model_config.L
-
-        # N - determine from first view
-        if self.likelihoods[0] == Likelihood.CTM:
-            # if M0 a structured view
-            self.N = len(self.data["M0"])
-        else:
-            # if M0 a simple view
-            self.N = self.data["M0"].shape[0]
-
-        # D, G and the number of structured views
-        D = []
-        G = []
-
-        m_ctm = 0
-
-        for m in range(self.M):
-            if self.likelihoods[m] != Likelihood.CTM:
-                D.append(self.data["M" + str(m)].shape[1])
-            else:
-                D.append(self.L[m_ctm])
-                m_ctm += 1
-                G.append(self.data["M" + str(m)][0].shape[1])
-
-        self.M_CTM = m_ctm
-        self.D = D
-        self.G = G
+    def get_predictions_FA(self, view_idx: int) -> np.ndarray:
+        """Predicted values for simple view at index ``view_idx``."""
+        return self.fa.nodelist_w[view_idx].E_w_z
