@@ -295,8 +295,6 @@ class FA:
                 self.nodelist_s[m],
                 self.nodelist_alpha[m],
                 self.nodelist_theta[m],
-                None,
-                None,
             )
 
             additional_nodes = self.nodelist_w[
