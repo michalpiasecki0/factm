@@ -66,18 +66,19 @@ class FACTM:
         self.ctms: list[CTM] = []
         self._fa_indices: list[int] = []  # FA nodelist index per structured view
 
-        for sv, cfg, sp_ctm in zip(
+        for structured_view, cfg, starting_param_ctm in zip(
             views.structured,
             model_config.structured_view_configs,
             starting_params_ctm,
+            strict=True,
         ):
             ctm = CTM(
-                data=sv.data,
+                data=structured_view.data,
                 N=self.N,
                 L=cfg.L,
-                G=sv.G,
+                G=structured_view.G,
                 K=K,
-                starting_params=sp_ctm,
+                starting_params=starting_param_ctm,
             )
             self.ctms.append(ctm)
 
@@ -120,7 +121,7 @@ class FACTM:
         self.fa.update()
 
         # 2. Sync FA → CTM and update each CTM
-        for ctm, fa_idx in zip(self.ctms, self._fa_indices):
+        for ctm, fa_idx in zip(self.ctms, self._fa_indices, strict=True):
             w_node_fa = self.fa.nodelist_w[fa_idx]
 
             # Push current FA estimates of W and Z into the CTM's w_z node

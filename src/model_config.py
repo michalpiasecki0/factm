@@ -112,6 +112,8 @@ class ModelConfig:
         if not self.z_priors:
             raise ValueError("Must have at least one Z prior.")
 
+        self.configs_combined = self.simple_view_configs + self.structured_view_configs
+
     # ------------------------------------------------------------------
     # Convenience accessors
     # ------------------------------------------------------------------
@@ -133,19 +135,15 @@ class ModelConfig:
     @property
     def view_configs(self) -> list:
         """Flat list: simple configs first, then structured configs."""
-        return list(self.simple_view_configs) + list(self.structured_view_configs)
+        return self.configs_combined
 
     @property
     def likelihoods(self) -> List[Likelihood]:
-        return [c.likelihood for c in self.simple_view_configs] + [
-            Likelihood.CTM for _ in self.structured_view_configs
-        ]
+        return [c.likelihood for c in self.configs_combined]
 
     @property
     def w_priors(self) -> List[WPrior]:
-        return [c.w_prior for c in self.simple_view_configs] + [
-            c.w_prior for c in self.structured_view_configs
-        ]
+        return [c.w_prior for c in self.configs_combined]
 
     @property
     def L(self) -> List[int]:

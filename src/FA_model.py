@@ -5,6 +5,7 @@ FA now operates exclusively on simple (Normal / Bernoulli) views.
 CTM (structured) views are owned by FACTM, which passes only the
 derived eta signal to FA via injected y-node data.
 """
+
 from dataclasses import dataclass
 from typing import List
 
@@ -67,8 +68,6 @@ class nodeFA_w_m:
         self.s_m_node = None
         self.alpha_m_node = None
         self.theta_m_node = None
-        self.tilde_w_m_node = None
-        self.p_m_node = None
 
         self.elbo = 0
 
@@ -82,8 +81,6 @@ class nodeFA_w_m:
         s_m_node=None,
         alpha_m_node=None,
         theta_m_node=None,
-        tilde_w_m_node=None,
-        p_m_node=None,
     ):
         self.z_node = z_node
         self.y_m_node = y_m_node
@@ -94,8 +91,6 @@ class nodeFA_w_m:
         self.s_m_node = s_m_node
         self.alpha_m_node = alpha_m_node
         self.theta_m_node = theta_m_node
-        self.tilde_w_m_node = tilde_w_m_node
-        self.p_m_node = p_m_node
 
         self.update_params()
         self.update_params_z()
@@ -194,13 +189,15 @@ class FA:
         self.nodelist_alpha = []
         self.nodelist_theta = []
 
-        for m, (sv, cfg) in enumerate(zip(views.simple, self.simple_view_configs)):
+        for m, (simple_view, simple_view_cfg) in enumerate(
+            zip(views.simple, self.simple_view_configs, strict=True)
+        ):
             # y node
-            node_y_m = cfg.create_y_node(sv.data, m, self.params)
+            node_y_m = simple_view_cfg.create_y_node(simple_view.data, m, self.params)
             self.nodelist_y.append(node_y_m)
 
             # W prior + sparsity nodes
-            w_prior_obj = cfg.create_w_prior()
+            w_prior_obj = simple_view_cfg.create_w_prior()
             prior_nodes = w_prior_obj.create_nodes(
                 m, self.params, starting_params, self.D[m], K
             )
