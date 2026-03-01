@@ -136,7 +136,7 @@ class FACTM:
 
             # 3. Push CTM outputs back into FA's proxy nodes
             self.fa.nodelist_y[fa_idx].data = ctm.node_eta.E_eta_minus_mu0.copy()
-            self.fa.nodelist_tau[fa_idx].Sigma0_inv = ctm.node_Sigma0.Sigma0.copy()
+            self.fa.nodelist_tau[fa_idx].Sigma0_inv = ctm.node_Sigma0.inv_Sigma0.copy()
 
     # ------------------------------------------------------------------
     # ELBO
