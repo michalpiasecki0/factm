@@ -224,6 +224,15 @@ class FA:
 
         self.elbo = 0
 
+    def _node_indices_to_update(self) -> np.ndarray:
+        """Indices of view nodes to update this step (random subset if factor < 1)."""
+        n = len(self.nodelist_w)
+        factor = self.model_config.node_update_factor
+        if factor >= 1.0:
+            return np.arange(n)
+        k = max(1, int(round(n * factor)))
+        return np.random.choice(n, size=k, replace=False)
+
     # ------------------------------------------------------------------
     # Extra y / tau nodes injected by FACTM for structured views
     # ------------------------------------------------------------------
@@ -312,15 +321,16 @@ class FA:
     def update(self):
         self.node_z.update()
 
-        # update W
-        # and all the nodes defying sparsity
-        #  - it depends on tau params, but not tau_w_z
-        for m in range(len(self.nodelist_w)):
+        indices = self._node_indices_to_update()
+        # update W (and sparsity nodes) only for selected view indices
+        for m in indices:
             self.nodelist_w[m].update()
 
-        # Tau update only for simple views (not CTM-injected ones)
-        for m in range(self.M):
-            self.nodelist_tau[m].update()
+        # Tau update only for selected simple-view indices
+        # (CTM-injected tau has no a0/b0)
+        for m in indices:
+            if not self.nodelist_tau[m].is_ctm:
+                self.nodelist_tau[m].update()
 
     def ELBO(self):
         self.node_z.ELBO()

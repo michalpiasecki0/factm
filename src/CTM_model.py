@@ -482,7 +482,17 @@ class CTM:
     """
 
     def __init__(
-        self, data, N, L, G, K, starting_params=None, FA=True, *args, **kwargs
+        self,
+        data,
+        N,
+        L,
+        G,
+        K,
+        starting_params=None,
+        FA=True,
+        node_update_factor=1.0,
+        *args,
+        **kwargs,
     ):
         self.N = N
         self.L = L
@@ -490,6 +500,7 @@ class CTM:
 
         # If FA=True we use FACTM, if FA=False simple CTM is fitted
         self.FA = FA
+        self.node_update_factor = node_update_factor
 
         if starting_params is None:
             starting_params = {}
@@ -569,6 +580,15 @@ class CTM:
 
         self.elbo = 0
 
+    def _node_indices_to_update(self) -> np.ndarray:
+        """Indices of CTM nodes to update this step (random subset if factor < 1)."""
+        n = 5  # xi, eta, beta, mu0, Sigma0
+        factor = self.node_update_factor
+        if factor >= 1.0:
+            return np.arange(n)
+        k = max(1, int(round(n * factor)))
+        return np.random.choice(n, size=k, replace=False)
+
     def MB(self):
         self.node_mu0.MB(self.node_eta, self.node_w_z)
         self.node_Sigma0.MB(self.node_eta, self.node_w_z, self.node_mu0)
@@ -578,12 +598,17 @@ class CTM:
         self.node_y.MB(self.node_beta, self.node_xi)
 
     def update(self):
-        self.node_xi.update()
-        self.node_eta.update()
-        self.node_beta.update()
-
-        self.node_mu0.update()
-        self.node_Sigma0.update()
+        indices = self._node_indices_to_update()
+        # Node order: xi=0, eta=1, beta=2, mu0=3, Sigma0=4
+        nodes = (
+            self.node_xi,
+            self.node_eta,
+            self.node_beta,
+            self.node_mu0,
+            self.node_Sigma0,
+        )
+        for i in indices:
+            nodes[i].update()
 
     def ELBO(self):
         self.node_xi.ELBO()

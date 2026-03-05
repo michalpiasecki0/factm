@@ -79,6 +79,7 @@ class FACTM:
                 G=structured_view.G,
                 K=K,
                 starting_params=starting_param_ctm,
+                node_update_factor=model_config.node_update_factor,
             )
             self.ctms.append(ctm)
 
