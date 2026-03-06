@@ -6,6 +6,8 @@ All M-string indexing is gone; simple and structured views are iterated
 over their own lists independently.
 """
 
+import numpy as np
+
 from .CTM_model import CTM
 from .FA_model import FA
 from .model_config import ModelConfig
@@ -116,9 +118,14 @@ class FACTM:
     # Update
     # ------------------------------------------------------------------
 
-    def update(self):
+    def update(self, update_factor: float | None = None):
         # 1. Update FA (Z and simple-view W nodes)
-        self.fa.update()
+        indices = (
+            np.random.choice(self.N, size=int(update_factor * self.N), replace=False)
+            if update_factor
+            else None
+        )
+        self.fa.update(indices=indices)
 
         # 2. Sync FA → CTM and update each CTM
         for ctm, fa_idx in zip(self.ctms, self._fa_indices, strict=True):
