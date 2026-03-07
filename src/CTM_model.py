@@ -137,8 +137,10 @@ class nodeCTM_eta:
         self.Sigma0_node = Sigma0_node
         self.xi_node = xi_node
 
-    def update(self):
-        for n in range(self.params.N):
+    def update(self, indices: np.ndarray | None = None):
+        if indices is None:
+            indices = np.arange(self.params.N)
+        for n in indices:
             if not self.params.maskNA_N[n]:
                 self.vi_zeta[n] = np.sum(self.E_exp_eta[n, :])
 
@@ -214,14 +216,14 @@ class nodeCTM_eta:
                 self.vi_var[n, :] = result.x[self.params.L :]
 
                 self.E_exp_eta[n, :] = np.exp(self.vi_mu[n, :] + self.vi_var[n, :] / 2)
-            self.E_eta_minus_mu0 = self.vi_mu - self.mu0_node.mu0
 
-            self.vi_mu = np.ma.array(self.vi_mu, mask=self.params.maskNA_N_L)
-            self.vi_var = np.ma.array(self.vi_var, mask=self.params.maskNA_N_L)
-            self.E_exp_eta = np.ma.array(self.E_exp_eta, mask=self.params.maskNA_N_L)
-            self.E_eta_minus_mu0 = np.ma.array(
-                self.E_eta_minus_mu0, mask=self.params.maskNA_N_L
-            )
+        self.E_eta_minus_mu0 = self.vi_mu - self.mu0_node.mu0
+        self.vi_mu = np.ma.array(self.vi_mu, mask=self.params.maskNA_N_L)
+        self.vi_var = np.ma.array(self.vi_var, mask=self.params.maskNA_N_L)
+        self.E_exp_eta = np.ma.array(self.E_exp_eta, mask=self.params.maskNA_N_L)
+        self.E_eta_minus_mu0 = np.ma.array(
+            self.E_eta_minus_mu0, mask=self.params.maskNA_N_L
+        )
 
     def ELBO(self):
         elbo = np.sum(np.log(self.vi_var)) / 2 + np.sum(~self.params.maskNA_N_L) / 2
@@ -316,12 +318,14 @@ class nodeCTM_xi:
         self.beta_node = beta_node
         self.y_node = data
 
-    def update(self):
+    def update(self, indices: np.ndarray | None = None):
+        if indices is None:
+            indices = np.arange(self.params.N)
         term_E_log_beta = (
             self.beta_node.digamma_vi_alpha.T - self.beta_node.digamma_sum_vi_alpha
         )
 
-        for n in range(self.params.N):
+        for n in indices:
             if not self.params.maskNA_N[n]:
                 vi_par_n = np.zeros((self.params.I_per_n[n], self.params.L))
                 vi_log_par_n = np.zeros((self.params.I_per_n[n], self.params.L))
@@ -577,9 +581,9 @@ class CTM:
         self.node_xi.MB(self.node_eta, self.node_beta, self.node_y)
         self.node_y.MB(self.node_beta, self.node_xi)
 
-    def update(self):
-        self.node_xi.update()
-        self.node_eta.update()
+    def update(self, indices: np.ndarray | None = None):
+        self.node_xi.update(indices=indices)
+        self.node_eta.update(indices=indices)
         self.node_beta.update()
 
         self.node_mu0.update()

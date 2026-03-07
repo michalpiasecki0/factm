@@ -139,7 +139,7 @@ class FACTM:
             ctm.node_w_z.E_w_z = w_node_fa.E_w_z.copy()
             ctm.node_w_z.E_w_z_squared = w_node_fa.E_w_z_squared.copy()
 
-            ctm.update()
+            ctm.update(indices=indices)
 
             # 3. Push CTM outputs back into FA's proxy nodes
             self.fa.nodelist_y[fa_idx].data = ctm.node_eta.E_eta_minus_mu0.copy()
