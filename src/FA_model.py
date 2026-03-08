@@ -309,8 +309,8 @@ class FA:
 
             self.nodelist_tau[m].MB(self.nodelist_y[m], self.nodelist_w[m], self.node_z)
 
-    def update(self):
-        self.node_z.update()
+    def update(self, indices: np.ndarray | None = None):
+        self.node_z.update(indices=indices)
 
         # update W
         # and all the nodes defying sparsity

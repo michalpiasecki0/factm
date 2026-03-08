@@ -187,7 +187,7 @@ class FACTModel(FACTM):
         print("Fitting model")
 
         for _ in tqdm(range(max_iter)):
-            self.update()
+            self.update(update_factor=self.model_config.node_update_factor)
             self.ELBO()
             self.elbo_sequence.append(self.get_elbo())
 

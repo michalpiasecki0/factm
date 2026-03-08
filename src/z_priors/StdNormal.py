@@ -35,7 +35,7 @@ class nodeFA_z:
         self.w_node = w_list
         self.tau_node = tau_list
 
-    def update(self):
+    def update(self, indices: np.ndarray | None = None):
         for k in range(self.params.K):
             should_update = True
             if self.z_priors is not None and self.z_priors[k] is not None:
@@ -50,10 +50,10 @@ class nodeFA_z:
             if should_update:
                 if self.z_priors is not None and self.z_priors[k] is not None:
                     self.z_priors[k].update_z_k(
-                        self, k, self.w_node, self.tau_node, self.y_node
+                        self, k, self.w_node, self.tau_node, self.y_node, indices
                     )
                 else:
-                    self.update_k(k)
+                    self.update_k(k, indices=indices)
 
                 for m in range(len(self.w_node)):
                     self.w_node[m].update_params_z()
@@ -63,7 +63,10 @@ class nodeFA_z:
     def update_informed(self, set_k):
         pass  # TBD
 
-    def update_k(self, k):
+    def update_k(self, k: int, indices: np.ndarray | None = None):
+        if indices is None:
+            indices = np.arange(self.params.N)
+
         vi_mu_new = np.zeros(self.params.N)
         vi_var_new = np.zeros(self.params.N)
 
@@ -115,8 +118,8 @@ class nodeFA_z:
         vi_var_new = 1 / (vi_var_new + 1)
         vi_mu_new = vi_mu_new * vi_var_new
 
-        self.vi_mu[:, k] = vi_mu_new
-        self.vi_var[:, k] = vi_var_new
+        self.vi_mu[indices, k] = vi_mu_new[indices]
+        self.vi_var[indices, k] = vi_var_new[indices]
         self.update_params()
 
     def update_params(self):
@@ -135,9 +138,18 @@ class StdNormalZPrior(ZPriorBase):
     """Standard Normal prior for latent factors Z."""
 
     def update_z_k(
-        self, z_node: "nodeFA_z", k: int, w_nodes: list, tau_nodes: list, y_nodes: list
+        self,
+        z_node: "nodeFA_z",
+        k: int,
+        w_nodes: list,
+        tau_nodes: list,
+        y_nodes: list,
+        indices: np.ndarray | None = None,
     ):
         """Update Z node for factor k."""
+        if indices is None:
+            indices = np.arange(z_node.params.N)
+
         vi_mu_new = np.zeros(z_node.params.N)
         vi_var_new = np.zeros(z_node.params.N)
 
@@ -186,8 +198,8 @@ class StdNormalZPrior(ZPriorBase):
         vi_var_new = 1 / (vi_var_new + 1)
         vi_mu_new = vi_mu_new * vi_var_new
 
-        z_node.vi_mu[:, k] = vi_mu_new
-        z_node.vi_var[:, k] = vi_var_new
+        z_node.vi_mu[indices, k] = vi_mu_new[indices]
+        z_node.vi_var[indices, k] = vi_var_new[indices]
         z_node.update_params()
 
     def should_update_for_factor(self, k: int, z_priors: list) -> bool:

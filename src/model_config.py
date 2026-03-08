@@ -100,11 +100,13 @@ class ModelConfig:
     simple_view_configs:     list of SimpleViewConfig (one per simple view)
     structured_view_configs: list of StructuredViewConfig (one per CTM view)
     z_priors:                list of ZPrior (one per latent factor)
+    node_update_factor:      fraction of view nodes to update per step (0, 1];
     """
 
     simple_view_configs: List[SimpleViewConfig]
     structured_view_configs: List[StructuredViewConfig]
     z_priors: List[ZPrior]
+    node_update_factor: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.simple_view_configs and not self.structured_view_configs:
@@ -112,6 +114,11 @@ class ModelConfig:
         if not self.z_priors:
             raise ValueError("Must have at least one Z prior.")
 
+        if not (0 < self.node_update_factor <= 1):
+            raise ValueError(
+                "node_update_factor must be in (0, 1]; got "
+                f"{self.node_update_factor!r}."
+            )
         self.configs_combined = self.simple_view_configs + self.structured_view_configs
 
     # ------------------------------------------------------------------
