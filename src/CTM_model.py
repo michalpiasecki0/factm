@@ -325,27 +325,29 @@ class nodeCTM_xi:
             self.beta_node.digamma_vi_alpha.T - self.beta_node.digamma_sum_vi_alpha
         )
 
-        for n in indices:
-            if not self.params.maskNA_N[n]:
-                vi_par_n = np.zeros((self.params.I_per_n[n], self.params.L))
-                vi_log_par_n = np.zeros((self.params.I_per_n[n], self.params.L))
+        active = np.asarray([n for n in indices if not self.params.maskNA_N[n]])
+        if active.size == 0:
+            return
 
-                vi_log_par_n = self.eta_node.vi_mu[n, :] + np.dot(
-                    self.y_node.data[n], term_E_log_beta
-                )
-                vi_log_par_n = vi_log_par_n - np.outer(
-                    np.max(vi_log_par_n, axis=1), np.ones(self.params.L)
-                )
-                vi_par_n = np.exp(vi_log_par_n)
+        I_per_n_arr = np.asarray(self.params.I_per_n)
+        for I_n in np.unique(I_per_n_arr[active]):
+            batch_indices = active[I_per_n_arr[active] == I_n]
 
-                norm_cons_tmp = np.outer(
-                    np.sum(vi_par_n, axis=1), np.ones(self.params.L)
-                )
-                vi_par_n = vi_par_n / norm_cons_tmp
-                vi_log_par_n = vi_log_par_n - log_eps(norm_cons_tmp)
+            vi_log_par_batch = self.eta_node.vi_mu[batch_indices, :][
+                :, None, :
+            ] + np.dot(
+                np.stack([self.y_node.data[n] for n in batch_indices]), term_E_log_beta
+            )
+            vi_log_par_batch -= np.max(vi_log_par_batch, axis=2, keepdims=True)
+            vi_par_batch = np.exp(vi_log_par_batch)
 
-                self.vi_log_par[n] = vi_log_par_n
-                self.vi_par[n] = vi_par_n
+            norm_cons_tmp = np.sum(vi_par_batch, axis=2, keepdims=True)
+            vi_par_batch /= norm_cons_tmp
+            vi_log_par_batch -= log_eps(norm_cons_tmp)
+
+            for i, n in enumerate(batch_indices):
+                self.vi_log_par[n] = vi_log_par_batch[i]
+                self.vi_par[n] = vi_par_batch[i]
 
     def ELBO(self):
         kl = 0
