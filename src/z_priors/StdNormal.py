@@ -67,59 +67,44 @@ class nodeFA_z:
         if indices is None:
             indices = np.arange(self.params.N)
 
-        vi_mu_new = np.zeros(self.params.N)
-        vi_var_new = np.zeros(self.params.N)
+        n_idx = len(indices)
+        vi_mu_new = np.zeros(n_idx)
+        vi_var_new = np.zeros(n_idx)
 
         for m in range(len(self.w_node)):
-            if not self.tau_node[m].is_ctm:
-                # VI var
-                vi_var_new += np.ma.dot(
-                    self.tau_node[m].E_tau, self.w_node[m].E_w_squared[:, k]
-                )
+            E_w_k = self.w_node[m].E_w[:, k]
+            E_z_k = self.E_z[indices, k]
 
-                # VI mu
-                resid = self.y_node[m].data - np.dot(self.w_node[m].E_w, self.E_z.T).T
-                partial_resid = (
-                    resid + np.outer(self.w_node[m].E_w[:, k], self.E_z[:, k]).T
+            resid = self.y_node[m].data[indices] - np.dot(
+                self.E_z[indices], self.w_node[m].E_w.T
+            )
+            partial_resid = resid + np.outer(E_z_k, E_w_k)
+            print(self.tau_node[m].E_tau.shape)
+            if not self.tau_node[m].is_ctm:
+                vi_var_new += np.ma.dot(
+                    self.tau_node[m].E_tau[indices], self.w_node[m].E_w_squared[:, k]
                 )
                 vi_mu_new += np.ma.sum(
-                    self.tau_node[m].E_tau * self.w_node[m].E_w[:, k] * partial_resid,
-                    axis=1,
+                    self.tau_node[m].E_tau[indices] * E_w_k * partial_resid, axis=1
                 )
-
             else:
-                # CTM view
                 E_quadratic_form_first_term = np.dot(
-                    np.dot(self.w_node[m].E_w[:, k], self.tau_node[m].Sigma0_inv),
-                    self.w_node[m].E_w[:, k],
+                    np.dot(E_w_k, self.tau_node[m].Sigma0_inv), E_w_k
                 )
                 E_quadratic_form_second_term = np.sum(
-                    np.diag(
-                        np.dot(
-                            self.tau_node[m].Sigma0_inv,
-                            np.diag(
-                                self.w_node[m].E_w_squared[:, k]
-                                - self.w_node[m].E_w[:, k] ** 2
-                            ),
-                        )
-                    )
+                    np.diag(self.tau_node[m].Sigma0_inv)
+                    * (self.w_node[m].E_w_squared[:, k] - E_w_k**2)
                 )
                 vi_var_new += E_quadratic_form_first_term + E_quadratic_form_second_term
 
-                resid = self.y_node[m].data - np.dot(self.w_node[m].E_w, self.E_z.T).T
-                partial_resid = (
-                    resid + np.outer(self.w_node[m].E_w[:, k], self.E_z[:, k]).T
-                )
-                first_term = np.dot(
-                    self.w_node[m].E_w[:, k], self.tau_node[m].Sigma0_inv
-                )
+                first_term = np.dot(E_w_k, self.tau_node[m].Sigma0_inv)
                 vi_mu_new += np.sum(first_term * partial_resid, axis=1)
 
         vi_var_new = 1 / (vi_var_new + 1)
         vi_mu_new = vi_mu_new * vi_var_new
 
-        self.vi_mu[indices, k] = vi_mu_new[indices]
-        self.vi_var[indices, k] = vi_var_new[indices]
+        self.vi_mu[indices, k] = vi_mu_new
+        self.vi_var[indices, k] = vi_var_new
         self.update_params()
 
     def update_params(self):
@@ -150,56 +135,48 @@ class StdNormalZPrior(ZPriorBase):
         if indices is None:
             indices = np.arange(z_node.params.N)
 
-        vi_mu_new = np.zeros(z_node.params.N)
-        vi_var_new = np.zeros(z_node.params.N)
+        n_idx = len(indices)
+        vi_mu_new = np.zeros(n_idx)
+        vi_var_new = np.zeros(n_idx)
 
         for m in range(len(w_nodes)):
-            if not tau_nodes[m].is_ctm:
-                # VI var
-                vi_var_new += np.ma.dot(
-                    tau_nodes[m].E_tau, w_nodes[m].E_w_squared[:, k]
-                )
+            E_w_k = w_nodes[m].E_w[:, k]  # (M,)
+            E_z_k = z_node.E_z[indices, k]  # (n_idx,)
 
-                # VI mu
-                resid = y_nodes[m].data - np.dot(w_nodes[m].E_w, z_node.E_z.T).T
-                partial_resid = (
-                    resid + np.outer(w_nodes[m].E_w[:, k], z_node.E_z[:, k]).T
+            # partial_resid only for indexed rows: (n_idx, M)
+            resid = y_nodes[m].data[indices] - np.dot(
+                z_node.E_z[indices], w_nodes[m].E_w.T
+            )
+            partial_resid = resid + np.outer(E_z_k, E_w_k)
+
+            if not tau_nodes[m].is_ctm:
+                vi_var_new += np.ma.dot(
+                    tau_nodes[m].E_tau[indices],
+                    w_nodes[m].E_w_squared[:, k],  # (n_idx, M) @ (M,) -> (n_idx,)
                 )
                 vi_mu_new += np.ma.sum(
-                    tau_nodes[m].E_tau * w_nodes[m].E_w[:, k] * partial_resid,
-                    axis=1,
+                    tau_nodes[m].E_tau[indices] * E_w_k * partial_resid,
+                    axis=1,  # all (n_idx, M)
                 )
 
             else:
-                # CTM view
                 E_quadratic_form_first_term = np.dot(
-                    np.dot(w_nodes[m].E_w[:, k], tau_nodes[m].Sigma0_inv),
-                    w_nodes[m].E_w[:, k],
+                    np.dot(E_w_k, tau_nodes[m].Sigma0_inv), E_w_k
                 )
                 E_quadratic_form_second_term = np.sum(
-                    np.diag(
-                        np.dot(
-                            tau_nodes[m].Sigma0_inv,
-                            np.diag(
-                                w_nodes[m].E_w_squared[:, k] - w_nodes[m].E_w[:, k] ** 2
-                            ),
-                        )
-                    )
+                    np.diag(tau_nodes[m].Sigma0_inv)
+                    * (w_nodes[m].E_w_squared[:, k] - E_w_k**2)
                 )
                 vi_var_new += E_quadratic_form_first_term + E_quadratic_form_second_term
 
-                resid = y_nodes[m].data - np.dot(w_nodes[m].E_w, z_node.E_z.T).T
-                partial_resid = (
-                    resid + np.outer(w_nodes[m].E_w[:, k], z_node.E_z[:, k]).T
-                )
-                first_term = np.dot(w_nodes[m].E_w[:, k], tau_nodes[m].Sigma0_inv)
+                first_term = np.dot(E_w_k, tau_nodes[m].Sigma0_inv)  # (M,)
                 vi_mu_new += np.sum(first_term * partial_resid, axis=1)
 
         vi_var_new = 1 / (vi_var_new + 1)
         vi_mu_new = vi_mu_new * vi_var_new
 
-        z_node.vi_mu[indices, k] = vi_mu_new[indices]
-        z_node.vi_var[indices, k] = vi_var_new[indices]
+        z_node.vi_mu[indices, k] = vi_mu_new
+        z_node.vi_var[indices, k] = vi_var_new
         z_node.update_params()
 
     def should_update_for_factor(self, k: int, z_priors: list) -> bool:
