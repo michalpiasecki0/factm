@@ -137,8 +137,10 @@ class nodeCTM_eta:
         self.Sigma0_node = Sigma0_node
         self.xi_node = xi_node
 
-    def update(self):
-        for n in range(self.params.N):
+    def update(self, indices: np.ndarray | None = None):
+        if indices is None:
+            indices = np.arange(self.params.N)
+        for n in indices:
             if not self.params.maskNA_N[n]:
                 self.vi_zeta[n] = np.sum(self.E_exp_eta[n, :])
 
@@ -214,14 +216,14 @@ class nodeCTM_eta:
                 self.vi_var[n, :] = result.x[self.params.L :]
 
                 self.E_exp_eta[n, :] = np.exp(self.vi_mu[n, :] + self.vi_var[n, :] / 2)
-            self.E_eta_minus_mu0 = self.vi_mu - self.mu0_node.mu0
 
-            self.vi_mu = np.ma.array(self.vi_mu, mask=self.params.maskNA_N_L)
-            self.vi_var = np.ma.array(self.vi_var, mask=self.params.maskNA_N_L)
-            self.E_exp_eta = np.ma.array(self.E_exp_eta, mask=self.params.maskNA_N_L)
-            self.E_eta_minus_mu0 = np.ma.array(
-                self.E_eta_minus_mu0, mask=self.params.maskNA_N_L
-            )
+        self.E_eta_minus_mu0 = self.vi_mu - self.mu0_node.mu0
+        self.vi_mu = np.ma.array(self.vi_mu, mask=self.params.maskNA_N_L)
+        self.vi_var = np.ma.array(self.vi_var, mask=self.params.maskNA_N_L)
+        self.E_exp_eta = np.ma.array(self.E_exp_eta, mask=self.params.maskNA_N_L)
+        self.E_eta_minus_mu0 = np.ma.array(
+            self.E_eta_minus_mu0, mask=self.params.maskNA_N_L
+        )
 
     def ELBO(self):
         elbo = np.sum(np.log(self.vi_var)) / 2 + np.sum(~self.params.maskNA_N_L) / 2
@@ -316,32 +318,36 @@ class nodeCTM_xi:
         self.beta_node = beta_node
         self.y_node = data
 
-    def update(self):
+    def update(self, indices: np.ndarray | None = None):
+        if indices is None:
+            indices = np.arange(self.params.N)
         term_E_log_beta = (
             self.beta_node.digamma_vi_alpha.T - self.beta_node.digamma_sum_vi_alpha
         )
 
-        for n in range(self.params.N):
-            if not self.params.maskNA_N[n]:
-                vi_par_n = np.zeros((self.params.I_per_n[n], self.params.L))
-                vi_log_par_n = np.zeros((self.params.I_per_n[n], self.params.L))
+        active = np.asarray([n for n in indices if not self.params.maskNA_N[n]])
+        if active.size == 0:
+            return
 
-                vi_log_par_n = self.eta_node.vi_mu[n, :] + np.dot(
-                    self.y_node.data[n], term_E_log_beta
-                )
-                vi_log_par_n = vi_log_par_n - np.outer(
-                    np.max(vi_log_par_n, axis=1), np.ones(self.params.L)
-                )
-                vi_par_n = np.exp(vi_log_par_n)
+        I_per_n_arr = np.asarray(self.params.I_per_n)
+        for I_n in np.unique(I_per_n_arr[active]):
+            batch_indices = active[I_per_n_arr[active] == I_n]
 
-                norm_cons_tmp = np.outer(
-                    np.sum(vi_par_n, axis=1), np.ones(self.params.L)
-                )
-                vi_par_n = vi_par_n / norm_cons_tmp
-                vi_log_par_n = vi_log_par_n - log_eps(norm_cons_tmp)
+            vi_log_par_batch = self.eta_node.vi_mu[batch_indices, :][
+                :, None, :
+            ] + np.dot(
+                np.stack([self.y_node.data[n] for n in batch_indices]), term_E_log_beta
+            )
+            vi_log_par_batch -= np.max(vi_log_par_batch, axis=2, keepdims=True)
+            vi_par_batch = np.exp(vi_log_par_batch)
 
-                self.vi_log_par[n] = vi_log_par_n
-                self.vi_par[n] = vi_par_n
+            norm_cons_tmp = np.sum(vi_par_batch, axis=2, keepdims=True)
+            vi_par_batch /= norm_cons_tmp
+            vi_log_par_batch -= log_eps(norm_cons_tmp)
+
+            for i, n in enumerate(batch_indices):
+                self.vi_log_par[n] = vi_log_par_batch[i]
+                self.vi_par[n] = vi_par_batch[i]
 
     def ELBO(self):
         kl = 0
@@ -577,9 +583,9 @@ class CTM:
         self.node_xi.MB(self.node_eta, self.node_beta, self.node_y)
         self.node_y.MB(self.node_beta, self.node_xi)
 
-    def update(self):
-        self.node_xi.update()
-        self.node_eta.update()
+    def update(self, indices: np.ndarray | None = None):
+        self.node_xi.update(indices=indices)
+        self.node_eta.update(indices=indices)
         self.node_beta.update()
 
         self.node_mu0.update()
