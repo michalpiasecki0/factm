@@ -118,14 +118,44 @@ class FACTM:
     # Update
     # ------------------------------------------------------------------
 
-    def update(self, update_factor: float | None = None):
-        # 1. Update FA (Z and simple-view W nodes)
-        indices = (
-            np.random.choice(self.N, size=int(update_factor * self.N), replace=False)
-            if update_factor
-            else None
+    def update(
+        self,
+        update_factor: float | None = None,
+        indices: np.ndarray | None = None,
+        data_scale: float = 1.0,
+        svi_rho: float = 1.0,
+    ):
+        """
+        Update FACTM parameters.
+
+        Parameters
+        ----------
+        update_factor:
+            Backward-compatible alias controlling minibatch size as S/N.
+        indices:
+            Explicit minibatch indices for local (Z) updates.
+        data_scale:
+            Scaling factor N/S used by Algorithm 3 for global variational params.
+        svi_rho:
+            Rho mixing coefficient for Algorithm 3 global parameter updates.
+        """
+        # 1. Select minibatch indices (Algorithm 3 local updates).
+        if indices is None:
+            if update_factor:
+                S = max(1, int(update_factor * self.N))
+                indices = np.random.choice(self.N, size=S, replace=False)
+                data_scale = self.N / S
+            else:
+                indices = None
+                data_scale = 1.0
+
+        # 2. Update FA (Z + global parameters). Strict minibatch and rho mixing
+        # are implemented inside FA/priors; here we only plumb metadata.
+        self.fa.update(
+            indices=indices,
+            data_scale=data_scale,
+            svi_rho=svi_rho,
         )
-        self.fa.update(indices=indices)
 
         # 2. Sync FA → CTM and update each CTM
         for ctm, fa_idx in zip(self.ctms, self._fa_indices, strict=True):

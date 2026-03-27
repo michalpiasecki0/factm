@@ -124,27 +124,58 @@ class ARDWPrior(WPriorBase):
         }
 
     def update_w_k(
-        self, w_node: "nodeFA_w_m", k: int, z_node: Any, y_node: Any, tau_node: Any
+        self,
+        w_node: "nodeFA_w_m",
+        k: int,
+        z_node: Any,
+        y_node: Any,
+        tau_node: Any,
+        indices: Any = None,
+        data_scale: float = 1.0,
     ):
         """Update W node for factor k for ARD prior."""
         if not w_node.is_ctm:
             # For FA likelihoods (Normal/Bernoulli)
-            nominator_second_term_tmp = np.dot(
-                w_node.E_w, z_node.E_z.T * z_node.E_z[:, k]
-            ).T
-            nominator_second_term = nominator_second_term_tmp - np.outer(
-                z_node.E_z[:, k] ** 2, w_node.E_w[:, k]
-            )
-            nominator = np.ma.sum(
-                tau_node.E_tau
-                * ((y_node.data.T * z_node.E_z[:, k]).T - nominator_second_term),
-                axis=0,
-            )
+            if indices is None:
+                nominator_second_term_tmp = np.dot(
+                    w_node.E_w, z_node.E_z.T * z_node.E_z[:, k]
+                ).T
+                nominator_second_term = nominator_second_term_tmp - np.outer(
+                    z_node.E_z[:, k] ** 2, w_node.E_w[:, k]
+                )
+                nominator = np.ma.sum(
+                    tau_node.E_tau
+                    * ((y_node.data.T * z_node.E_z[:, k]).T - nominator_second_term),
+                    axis=0,
+                )
 
-            denominator = (
-                np.ma.dot(z_node.E_z_squared[:, k], tau_node.E_tau)
-                + w_node.alpha_m_node.E_alpha[k]
-            )
+                denominator = (
+                    np.ma.dot(z_node.E_z_squared[:, k], tau_node.E_tau)
+                    + w_node.alpha_m_node.E_alpha[k]
+                )
+            else:
+                # Minibatch-only computation (Algorithm 3 global update).
+                z_sub = z_node.E_z[indices]  # (S,K)
+                z_k = z_sub[:, k]  # (S,)
+                z_sq_k = z_node.E_z_squared[indices, k]  # (S,)
+                tau_sub = tau_node.E_tau[indices]  # (S,D)
+                y_sub = y_node.data[indices]  # (S,D)
+
+                nominator_second_term_tmp = np.dot(w_node.E_w, z_sub.T * z_k).T  # (S,D)
+                nominator_second_term = nominator_second_term_tmp - np.outer(
+                    z_k**2, w_node.E_w[:, k]
+                )  # (S,D)
+
+                nominator_data = np.ma.sum(
+                    tau_sub * ((y_sub.T * z_k).T - nominator_second_term),
+                    axis=0,
+                )
+                nominator = data_scale * nominator_data
+
+                denominator = (
+                    data_scale * np.ma.dot(z_sq_k, tau_sub)
+                    + w_node.alpha_m_node.E_alpha[k]
+                )
 
             w_node.hat_w_m_node.update_k(k, nominator, denominator)
             w_node.update_params()
@@ -152,27 +183,48 @@ class ARDWPrior(WPriorBase):
             w_node.alpha_m_node.update_k(k)
         else:
             # For CTM likelihood
-            E_zE_zk = np.dot(z_node.E_z.T, z_node.E_z[:, k])
-            E_zE_zk[k] = 0
-            EwE_zE_zk = np.dot(w_node.E_w, E_zE_zk)
-            term1 = np.dot(tau_node.Sigma0_inv, EwE_zE_zk)
+            if indices is None:
+                E_zE_zk = np.dot(z_node.E_z.T, z_node.E_z[:, k])
+                E_zE_zk[k] = 0
+                EwE_zE_zk = np.dot(w_node.E_w, E_zE_zk)
+                term1 = np.dot(tau_node.Sigma0_inv, EwE_zE_zk)
 
-            Ez_squaredk = np.sum(z_node.E_z_squared[:, k])
+                Ez_squaredk = np.sum(z_node.E_z_squared[:, k])
+            else:
+                z_sub = z_node.E_z[indices]  # (S,K)
+                z_k = z_sub[:, k]  # (S,)
+                z_sq_k = z_node.E_z_squared[indices, k]  # (S,)
+
+                E_zE_zk = data_scale * np.dot(z_sub.T, z_k)
+                E_zE_zk[k] = 0
+                EwE_zE_zk = np.dot(w_node.E_w, E_zE_zk)
+                term1 = np.dot(tau_node.Sigma0_inv, EwE_zE_zk)
+
+                Ez_squaredk = data_scale * np.sum(z_sq_k)
+
             Sigma_inv_nodiag = tau_node.Sigma0_inv - np.diag(
                 np.diag(tau_node.Sigma0_inv)
             )
             term2 = np.dot(Sigma_inv_nodiag, w_node.E_w[:, k]) * Ez_squaredk
 
-            term3 = np.dot(
-                z_node.E_z[:, k],
-                np.ma.dot(y_node.data, tau_node.Sigma0_inv),
-            )
+            if indices is None:
+                term3 = np.dot(
+                    z_node.E_z[:, k],
+                    np.ma.dot(y_node.data, tau_node.Sigma0_inv),
+                )
+            else:
+                y_sub = y_node.data[indices]  # (S,D)
+                term3_unscaled = np.dot(
+                    z_k,
+                    np.ma.dot(y_sub, tau_node.Sigma0_inv),
+                )
+                term3 = data_scale * term3_unscaled
 
             nominator = term3 - term1 - term2
 
             denominator = np.diag(
                 w_node.alpha_m_node.E_alpha[k] * np.eye(w_node.D)
-                + np.sum(z_node.E_z_squared[:, k]) * (tau_node.Sigma0_inv)
+                + Ez_squaredk * (tau_node.Sigma0_inv)
             )
             w_node.hat_w_m_node.update_k(k, nominator, denominator)
             w_node.update_params()

@@ -95,14 +95,24 @@ class nodeFA_w_m:
         self.update_params()
         self.update_params_z()
 
-    def update(self):
+    def update(self, indices: np.ndarray | None = None, data_scale: float = 1.0):
         for k in range(self.params.K):
-            self.update_k(k)
+            self.update_k(k, indices=indices, data_scale=data_scale)
         if not self.is_ctm:
             self.tau_m_node.update_params_w_z()
 
-    def update_k(self, k):
-        self.w_prior.update_w_k(self, k, self.z_node, self.y_m_node, self.tau_m_node)
+    def update_k(
+        self, k: int, indices: np.ndarray | None = None, data_scale: float = 1.0
+    ):
+        self.w_prior.update_w_k(
+            self,
+            k,
+            self.z_node,
+            self.y_m_node,
+            self.tau_m_node,
+            indices=indices,
+            data_scale=data_scale,
+        )
 
     def update_params(self):
         self.w_prior.update_params(self)
@@ -309,18 +319,108 @@ class FA:
 
             self.nodelist_tau[m].MB(self.nodelist_y[m], self.nodelist_w[m], self.node_z)
 
-    def update(self, indices: np.ndarray | None = None):
+    def update(
+        self,
+        indices: np.ndarray | None = None,
+        data_scale: float = 1.0,
+        svi_rho: float = 1.0,
+    ):
+        # Local update for Z (factors) on a minibatch.
         self.node_z.update(indices=indices)
 
-        # update W
-        # and all the nodes defying sparsity
-        #  - it depends on tau params, but not tau_w_z
+        # Algorithm 3: rho mixing for global variational params.
+        # Only blend global parameters (W/tau and sparsity/noise hyperparameters),
+        # never blend local parameters (Z).
+        do_mix = abs(svi_rho - 1.0) > 1e-12
+        rho = float(svi_rho)
+        one_minus_rho = 1.0 - rho
+
+        if do_mix:
+            w_old = []
+            for w_node in self.nodelist_w:
+                entry = {}
+                if w_node.hat_w_m_node is not None:
+                    entry["hat_w_mu"] = w_node.hat_w_m_node.vi_mu.copy()
+                    entry["hat_w_var"] = w_node.hat_w_m_node.vi_var.copy()
+                if w_node.w_m_node_not_sparse is not None:
+                    entry["w_mu"] = w_node.w_m_node_not_sparse.vi_mu.copy()
+                    entry["w_var"] = w_node.w_m_node_not_sparse.vi_var.copy()
+                if w_node.s_m_node is not None:
+                    entry["s_lambda"] = w_node.s_m_node.vi_lambda.copy()
+                if w_node.alpha_m_node is not None:
+                    entry["alpha_b"] = w_node.alpha_m_node.vi_b.copy()
+                if w_node.theta_m_node is not None:
+                    entry["theta_a"] = w_node.theta_m_node.vi_a.copy()
+                    entry["theta_b"] = w_node.theta_m_node.vi_b.copy()
+                w_old.append(entry)
+
+            tau_old = [self.nodelist_tau[m].vi_b.copy() for m in range(self.M)]
+
+        # Candidate global updates (minibatch only; scaled by data_scale).
         for m in range(len(self.nodelist_w)):
-            self.nodelist_w[m].update()
+            self.nodelist_w[m].update(indices=indices, data_scale=data_scale)
 
         # Tau update only for simple views (not CTM-injected ones)
         for m in range(self.M):
-            self.nodelist_tau[m].update()
+            self.nodelist_tau[m].update(indices=indices, data_scale=data_scale)
+
+        if not do_mix:
+            return
+
+        # Apply rho mixing and recompute derived expectations to remain consistent.
+        for w_node, entry in zip(self.nodelist_w, w_old, strict=True):
+            if w_node.hat_w_m_node is not None:
+                w_node.hat_w_m_node.vi_mu[:] = (
+                    one_minus_rho * entry["hat_w_mu"] + rho * w_node.hat_w_m_node.vi_mu
+                )
+                w_node.hat_w_m_node.vi_var[:] = (
+                    one_minus_rho * entry["hat_w_var"]
+                    + rho * w_node.hat_w_m_node.vi_var
+                )
+
+            if w_node.w_m_node_not_sparse is not None:
+                w_node.w_m_node_not_sparse.vi_mu[:] = (
+                    one_minus_rho * entry["w_mu"]
+                    + rho * w_node.w_m_node_not_sparse.vi_mu
+                )
+                w_node.w_m_node_not_sparse.vi_var[:] = (
+                    one_minus_rho * entry["w_var"]
+                    + rho * w_node.w_m_node_not_sparse.vi_var
+                )
+
+            if w_node.s_m_node is not None:
+                w_node.s_m_node.vi_lambda[:] = (
+                    one_minus_rho * entry["s_lambda"] + rho * w_node.s_m_node.vi_lambda
+                )
+                # nodeFA_s_m stores vi_gamma derived from vi_lambda.
+                w_node.s_m_node.vi_gamma = 1.0 / (
+                    1.0 + np.exp(-w_node.s_m_node.vi_lambda)
+                )
+
+            if w_node.alpha_m_node is not None:
+                w_node.alpha_m_node.vi_b[:] = (
+                    one_minus_rho * entry["alpha_b"] + rho * w_node.alpha_m_node.vi_b
+                )
+                w_node.alpha_m_node.update_params()
+
+            if w_node.theta_m_node is not None:
+                w_node.theta_m_node.vi_a[:] = (
+                    one_minus_rho * entry["theta_a"] + rho * w_node.theta_m_node.vi_a
+                )
+                w_node.theta_m_node.vi_b[:] = (
+                    one_minus_rho * entry["theta_b"] + rho * w_node.theta_m_node.vi_b
+                )
+                w_node.theta_m_node.update_params()
+
+            w_node.update_params()
+            w_node.update_params_z()
+
+        # Blend tau (only simple views) and recompute residual expectations.
+        for m in range(self.M):
+            tau_node = self.nodelist_tau[m]
+            tau_node.vi_b[:] = one_minus_rho * tau_old[m] + rho * tau_node.vi_b
+            tau_node.update_params()
+            tau_node.update_params_w_z()
 
     def ELBO(self):
         self.node_z.ELBO()

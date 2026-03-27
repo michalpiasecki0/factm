@@ -27,7 +27,14 @@ class WPriorBase(ABC):
 
     @abstractmethod
     def update_w_k(
-        self, w_node: "nodeFA_w_m", k: int, z_node: Any, y_node: Any, tau_node: Any
+        self,
+        w_node: "nodeFA_w_m",
+        k: int,
+        z_node: Any,
+        y_node: Any,
+        tau_node: Any,
+        indices: Any = None,
+        data_scale: float = 1.0,
     ):
         """Update W node for factor k given this prior."""
         pass

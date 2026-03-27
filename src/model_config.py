@@ -8,7 +8,7 @@ instead of runtime Likelihood checks.
 ModelConfig holds the two lists separately, mirroring the Views container.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 from .enums import Likelihood, WPrior, ZPrior
@@ -16,6 +16,32 @@ from .likelihoods.fa.Bernoulli import BernoulliLikelihood
 from .likelihoods.fa.Normal import NormalLikelihood
 from .w_priors.factory import create_w_prior
 from .z_priors.factory import create_z_priors
+
+
+@dataclass
+class SVIConfig:
+    """
+    Stochastic Variational Inference (SVI) configuration.
+
+    This project uses Algorithm 3 from the MOFA+ appendix, where:
+    - local parameters (Z) are updated on a minibatch of samples,
+    - global parameters (W/tau and sparsity/noise hyperparameters) are updated
+      using minibatch contributions scaled by `N/S`,
+    - and global variational parameters are updated with a rho-mixing schedule.
+    """
+
+    enabled: bool = False
+
+    # rho(t) = rho_tau / (1 + rho_kappa * t) ** rho_power
+    rho_tau: float = 1.0
+    rho_kappa: float = 0.01
+    rho_power: float = 0.75
+    rho_clip: tuple[float, float] = (0.0, 1.0)
+
+    # Fraction S/N for sampling minibatch indices.
+    # If None, falls back to ModelConfig.node_update_factor.
+    batch_fraction: float | None = None
+
 
 # ---------------------------------------------------------------------------
 # Per-view configuration objects
@@ -106,6 +132,7 @@ class ModelConfig:
     simple_view_configs: List[SimpleViewConfig]
     structured_view_configs: List[StructuredViewConfig]
     z_priors: List[ZPrior]
+    svi: SVIConfig = field(default_factory=SVIConfig)
     node_update_factor: float = 1.0
 
     def __post_init__(self) -> None:
@@ -119,6 +146,26 @@ class ModelConfig:
                 "node_update_factor must be in (0, 1]; got "
                 f"{self.node_update_factor!r}."
             )
+
+        if not isinstance(self.svi, SVIConfig):
+            raise TypeError("svi must be an instance of SVIConfig")
+
+        if len(self.svi.rho_clip) != 2:
+            raise ValueError("svi.rho_clip must be a tuple (min,max)")
+        rho_min, rho_max = self.svi.rho_clip
+        if not (0.0 <= rho_min <= rho_max <= 1.0):
+            raise ValueError(
+                f"svi.rho_clip must satisfy 0<=min<=max<=1; got {self.svi.rho_clip!r}"
+            )
+
+        if self.svi.batch_fraction is not None and not (
+            0 < self.svi.batch_fraction <= 1
+        ):
+            raise ValueError(
+                "svi.batch_fraction must be in (0, 1] or None; got "
+                f"{self.svi.batch_fraction!r}."
+            )
+
         self.configs_combined = self.simple_view_configs + self.structured_view_configs
 
     # ------------------------------------------------------------------

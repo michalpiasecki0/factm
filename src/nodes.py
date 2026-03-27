@@ -60,10 +60,29 @@ class nodeFA_tau_m:
             self.update_all_params()
             self.update_params()
 
-    def update(self):
-        self.update_params_w_z()
-        self.vi_b = self.b0 + np.ma.sum(self.E_resid_squared_half, axis=0)
+    def update(self, indices: np.ndarray | None = None, data_scale: float = 1.0):
+        """
+        Update tau variational parameters.
 
+        If `indices` is provided, the residual-squared contribution is computed
+        on a minibatch only and scaled by `data_scale = N/S` (Algorithm 3).
+        """
+        if self.is_ctm:
+            # CTM tau nodes are injected with Sigma0_inv and do not run this VI update.
+            raise RuntimeError(
+                "CTM tau node update not supported via nodeFA_tau_m.update"
+            )
+
+        self.update_params_w_z()
+
+        if indices is None:
+            resid_sum = np.ma.sum(self.E_resid_squared_half, axis=0)
+        else:
+            resid_sum = (
+                np.ma.sum(self.E_resid_squared_half[indices], axis=0) * data_scale
+            )
+
+        self.vi_b = self.b0 + resid_sum
         self.update_params()
 
     def update_all_params(self):

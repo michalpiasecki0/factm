@@ -70,6 +70,9 @@ class FACTModel(FACTM):
 
         self.__first_fit = True
         self.elbo_sequence = []
+        # Persistent SVI iteration counter (Algorithm 3 rho schedule).
+        # Must survive multiple `.fit()` calls.
+        self._svi_t: int = 0
 
     # ------------------------------------------------------------------
     # Pre-training
@@ -84,7 +87,9 @@ class FACTModel(FACTM):
             raise TypeError("FA_pretrain must be one of the FA_Pretrain enum values.")
 
         # 1. Pre-train each CTM independently
-        for i, (sv, ctm) in enumerate(zip(self.views.structured, self.ctms)):
+        for i, (sv, ctm) in enumerate(
+            zip(self.views.structured, self.ctms, strict=True)
+        ):
             print(f"Pretraining CTM for structured view {i}")
 
             tmp_ctm = CTM(
@@ -187,12 +192,32 @@ class FACTModel(FACTM):
         print("Fitting model")
 
         for _ in tqdm(range(max_iter)):
-            self.update(update_factor=self.model_config.node_update_factor)
+            if self.model_config.svi.enabled:
+                t = self._svi_t
+                rho_cfg = self.model_config.svi
+                rho = rho_cfg.rho_tau / (
+                    (1.0 + rho_cfg.rho_kappa * t) ** rho_cfg.rho_power
+                )
+                rho_min, rho_max = rho_cfg.rho_clip
+                rho = float(np.clip(rho, rho_min, rho_max))
+                self._svi_t += 1
+
+                batch_fraction = (
+                    rho_cfg.batch_fraction
+                    if rho_cfg.batch_fraction is not None
+                    else self.model_config.node_update_factor
+                )
+                self.update(
+                    update_factor=batch_fraction,
+                    svi_rho=rho,
+                )
+            else:
+                self.update(update_factor=self.model_config.node_update_factor)
             self.ELBO()
             self.elbo_sequence.append(self.get_elbo())
 
-            if self.elbo_sequence[-1] - self.elbo_sequence[-2] < elbo_tres:
-                break
+            # if self.elbo_sequence[-1] - self.elbo_sequence[-2] < elbo_tres:
+            #     break
 
     # ------------------------------------------------------------------
     # Point estimators
