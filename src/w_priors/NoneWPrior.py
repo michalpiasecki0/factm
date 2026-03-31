@@ -119,3 +119,32 @@ class NoneWPrior(WPriorBase):
     def get_additional_nodes_to_update(self) -> list:
         """None prior has no additional nodes."""
         return []
+
+    def svi_target_w_k(
+        self,
+        w_node: "nodeFA_w_m",
+        k: int,
+        z_node: Any,
+        y_node: Any,
+        tau_node: Any,
+        indices,
+    ) -> dict:
+        if indices is None:
+            indices = np.arange(z_node.params.N)
+        if w_node.is_ctm:
+            raise NotImplementedError("SVI globals for CTM-injected W not supported.")
+
+        z_k = z_node.E_z[indices, k]
+        z2_k = z_node.E_z_squared[indices, k]
+
+        nominator_second_term = np.dot(w_node.E_w, z_node.E_z[indices].T) - np.outer(
+            w_node.E_w[:, k], z_k
+        )
+        nominator_resid = y_node.data[indices] - nominator_second_term.T
+
+        nominator = np.ma.dot(z_k, tau_node.E_tau[indices] * nominator_resid)
+        denominator = np.ma.dot(z2_k, tau_node.E_tau[indices]) + 1.0
+
+        mu = nominator / denominator
+        var = 1.0 / denominator
+        return {"mu": mu, "var": var}

@@ -32,6 +32,23 @@ class WPriorBase(ABC):
         """Update W node for factor k given this prior."""
         pass
 
+    def svi_target_w_k(
+        self,
+        w_node: "nodeFA_w_m",
+        k: int,
+        z_node: Any,
+        y_node: Any,
+        tau_node: Any,
+        indices,
+    ) -> dict:
+        """
+        Compute minibatch-based target variational parameters for factor k.
+
+        This is used by stochastic mean-field VI to form λ_B^(t+1), which is
+        then mixed into the global parameters with step size ρ_t.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     def update_params(self, w_node: "nodeFA_w_m"):
         """Update E_w and E_w_squared based on this prior."""
