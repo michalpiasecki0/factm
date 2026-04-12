@@ -66,6 +66,20 @@ class nodeFA_tau_m:
 
         self.update_params()
 
+    def svi_update(self, indices: np.ndarray, rho: float):
+        """
+        Stochastic update for tau using a minibatch of samples.
+        """
+        if self.is_ctm:
+            return
+        if indices is None:
+            indices = np.arange(self.params.N)
+        self.update_params_w_z()
+        batch_sum = np.ma.sum(self.E_resid_squared_half[indices], axis=0)
+        vi_b_target = self.b0 + batch_sum
+        self.vi_b = (1.0 - rho) * self.vi_b + rho * vi_b_target
+        self.update_params()
+
     def update_all_params(self):
         self.log_gamma_a0 = gammaln(self.a0)
         self.log_gamma_vi_a = gammaln(self.vi_a)
