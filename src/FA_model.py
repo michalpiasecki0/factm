@@ -119,6 +119,75 @@ class nodeFA_w_m:
     def ELBO(self):
         self.elbo = self.w_prior.compute_elbo(self)
 
+    def svi_update(self, indices: np.ndarray, rho: float):
+        """
+        Stochastic mean-field update for global W (+ sparsity nodes).
+        """
+        if self.is_ctm:
+            # Keep CTM-injected W deterministic (not treated as global SVI here).
+            self.update()
+            return
+
+        for k in range(self.params.K):
+            targets = self.w_prior.svi_target_w_k(
+                self, k, self.z_node, self.y_m_node, self.tau_m_node, indices
+            )
+
+            if self.w_m_node_not_sparse is not None:
+                self.w_m_node_not_sparse.vi_mu[:, k] = (
+                    1.0 - rho
+                ) * self.w_m_node_not_sparse.vi_mu[:, k] + rho * targets["mu"]
+                self.w_m_node_not_sparse.vi_var[:, k] = (
+                    1.0 - rho
+                ) * self.w_m_node_not_sparse.vi_var[:, k] + rho * targets["var"]
+            else:
+                if "mu" in targets:
+                    self.hat_w_m_node.vi_mu[:, k] = (
+                        1.0 - rho
+                    ) * self.hat_w_m_node.vi_mu[:, k] + rho * targets["mu"]
+                    self.hat_w_m_node.vi_var[:, k] = (
+                        1.0 - rho
+                    ) * self.hat_w_m_node.vi_var[:, k] + rho * targets["var"]
+                else:
+                    self.hat_w_m_node.vi_mu[:, k] = (
+                        1.0 - rho
+                    ) * self.hat_w_m_node.vi_mu[:, k] + rho * targets["mu_hat"]
+                    self.hat_w_m_node.vi_var[:, k] = (
+                        1.0 - rho
+                    ) * self.hat_w_m_node.vi_var[:, k] + rho * targets["var_hat"]
+
+                    self.s_m_node.vi_lambda[:, k] = (
+                        1.0 - rho
+                    ) * self.s_m_node.vi_lambda[:, k] + rho * targets["lambda"]
+                    self.s_m_node.vi_gamma[:, k] = 1.0 / (
+                        1.0 + np.exp(-self.s_m_node.vi_lambda[:, k])
+                    )
+
+            self.update_params()
+
+            if self.alpha_m_node is not None:
+                vi_b_target = (
+                    self.alpha_m_node.b0 + np.sum(self.E_hat_w_squared[:, k]) / 2
+                )
+                self.alpha_m_node.vi_b[k] = (1.0 - rho) * self.alpha_m_node.vi_b[
+                    k
+                ] + rho * vi_b_target
+                self.alpha_m_node.update_params()
+
+            if self.theta_m_node is not None and self.s_m_node is not None:
+                sum_sdk = np.sum(self.s_m_node.vi_gamma[:, k])
+                vi_a_target = self.theta_m_node.a0 + sum_sdk
+                vi_b_target = self.theta_m_node.b0 - sum_sdk + self.D
+                self.theta_m_node.vi_a[k] = (1.0 - rho) * self.theta_m_node.vi_a[
+                    k
+                ] + rho * vi_a_target
+                self.theta_m_node.vi_b[k] = (1.0 - rho) * self.theta_m_node.vi_b[
+                    k
+                ] + rho * vi_b_target
+                self.theta_m_node.update_params()
+
+        self.update_params_z()
+
 
 class FA:
     """
@@ -321,6 +390,20 @@ class FA:
         # Tau update only for simple views (not CTM-injected ones)
         for m in range(self.M):
             self.nodelist_tau[m].update()
+
+    def update_svi(self, indices: np.ndarray, rho: float):
+        if indices is None:
+            indices = np.random.choice(self.N, size=min(32, self.N), replace=False)
+
+        # Local updates
+        self.node_z.update(indices=indices)
+
+        # Global updates
+        for m in range(len(self.nodelist_w)):
+            self.nodelist_w[m].svi_update(indices=indices, rho=rho)
+
+        for m in range(self.M):
+            self.nodelist_tau[m].svi_update(indices=indices, rho=rho)
 
     def ELBO(self):
         self.node_z.ELBO()

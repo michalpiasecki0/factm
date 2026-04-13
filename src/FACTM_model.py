@@ -139,9 +139,29 @@ class FACTM:
             ctm.node_w_z.E_w_z = w_node_fa.E_w_z.copy()
             ctm.node_w_z.E_w_z_squared = w_node_fa.E_w_z_squared.copy()
 
-            ctm.update()
+            ctm.update(indices=indices)
 
             # 3. Push CTM outputs back into FA's proxy nodes
+            self.fa.nodelist_y[fa_idx].data = ctm.node_eta.E_eta_minus_mu0.copy()
+            self.fa.nodelist_tau[fa_idx].Sigma0_inv = ctm.node_Sigma0.inv_Sigma0.copy()
+
+    def update_svi(self, indices: np.ndarray, rho: float):
+        if indices is None:
+            raise ValueError("indices must be provided for SVI update.")
+
+        self.fa.update_svi(indices=indices, rho=rho)
+
+        for ctm, fa_idx in zip(self.ctms, self._fa_indices, strict=True):
+            w_node_fa = self.fa.nodelist_w[fa_idx]
+            ctm.node_w_z.E_w = w_node_fa.E_w.copy()
+            ctm.node_w_z.E_w_squared = w_node_fa.E_w_squared.copy()
+            ctm.node_w_z.E_z = self.fa.node_z.E_z.copy()
+            ctm.node_w_z.E_z_squared = self.fa.node_z.E_z_squared
+            ctm.node_w_z.E_w_z = w_node_fa.E_w_z.copy()
+            ctm.node_w_z.E_w_z_squared = w_node_fa.E_w_z_squared.copy()
+
+            ctm.update(indices=indices)
+
             self.fa.nodelist_y[fa_idx].data = ctm.node_eta.E_eta_minus_mu0.copy()
             self.fa.nodelist_tau[fa_idx].Sigma0_inv = ctm.node_Sigma0.inv_Sigma0.copy()
 
