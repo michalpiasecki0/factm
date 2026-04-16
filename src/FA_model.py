@@ -7,7 +7,7 @@ derived eta signal to FA via injected y-node data.
 """
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -32,6 +32,11 @@ class FAParams:
     likelihoods: List[Likelihood]
     Z_priors: list
     W_priors: List[str]
+
+    # Optional cohort info: labels (N,), cohort_mu (C x K), cohort_sigma2 (C x K)
+    cohort_labels: Optional[np.ndarray] = None
+    cohort_mu: Optional[np.ndarray] = None
+    cohort_sigma2: Optional[np.ndarray] = None
 
 
 class nodeFA_w_m:
@@ -151,6 +156,26 @@ class FA:
             SimpleViewConfig
         ] = model_config.simple_view_configs
 
+        # Starting params
+        if starting_params is None:
+            starting_params = {}
+
+        # Optional cohort handling: starting_params may provide 'cohort_labels',
+        # 'cohort_mu', 'cohort_sigma2'. If cohort_labels provided, initialise
+        # cohort parameters if not passed.
+        cohort_labels = starting_params.get("cohort_labels", None)
+        cohort_mu = starting_params.get("cohort_mu", None)
+        cohort_sigma2 = starting_params.get("cohort_sigma2", None)
+        if cohort_labels is not None:
+            cohort_labels = np.asarray(cohort_labels, dtype=int)
+            if cohort_labels.shape[0] != self.views.N:
+                raise ValueError("cohort_labels must have length N")
+            num_cohorts = int(cohort_labels.max() + 1)
+            if cohort_mu is None:
+                cohort_mu = np.random.normal(size=(num_cohorts, self.K))
+            if cohort_sigma2 is None:
+                cohort_sigma2 = np.ones((num_cohorts, self.K))
+
         # Create shared FAParams (used by sub-nodes)
         self.params = FAParams(
             N=self.N,
@@ -160,11 +185,12 @@ class FA:
             likelihoods=[c.likelihood for c in self.simple_view_configs],
             Z_priors=model_config.z_priors,
             W_priors=[c.w_prior for c in self.simple_view_configs],
+            cohort_labels=cohort_labels,
+            cohort_mu=cohort_mu,
+            cohort_sigma2=cohort_sigma2,
         )
 
-        # Starting params
-        if starting_params is None:
-            starting_params = {}
+        # Continue setting per-view starting params
         for m in range(self.M):
             starting_params.setdefault(m, {})
 
@@ -309,7 +335,111 @@ class FA:
 
             self.nodelist_tau[m].MB(self.nodelist_y[m], self.nodelist_w[m], self.node_z)
 
+    def update_cohort_params(self):
+        """Estimate cohort_mu and cohort_sigma2 from current q(z).
+
+        Simple moment estimates:
+          mu_ck = mean_n E[z_nk] for n in cohort c
+          sigma2_ck = mean_n (Var[z_nk] + (E[z_nk] - mu_ck)^2)
+        """
+        params = self.params
+        if getattr(params, "cohort_labels", None) is None:
+            return
+        labels = params.cohort_labels
+        K = self.K
+        C = int(labels.max() + 1)
+        cohort_mu = np.zeros((C, K))
+        cohort_sigma2 = np.ones((C, K))
+        for c in range(C):
+            idx = np.where(labels == c)[0]
+            if idx.size == 0:
+                continue
+            E_z = self.node_z.E_z[idx]  # (n_c, K)
+            E_z2 = self.node_z.E_z_squared[idx]
+            mu_c = np.mean(E_z, axis=0)
+            # variance = E[z^2] - E[z]^2
+            var_c = np.mean(E_z2 - E_z ** 2, axis=0)
+            sigma2_c = np.mean(var_c + (E_z - mu_c) ** 2, axis=0)
+            # ensure positivity
+            sigma2_c = np.maximum(sigma2_c, 1e-6)
+            cohort_mu[c] = mu_c
+            cohort_sigma2[c] = sigma2_c
+        params.cohort_mu = cohort_mu
+        params.cohort_sigma2 = cohort_sigma2
+    
+    #ALTERNATYWA LEPSZA
+    def update_cohort_params2(self):
+        """Estimate cohort_mu and cohort_sigma2 from current q(z) using VB with
+        Normal-Inverse-Gamma hyperpriors.
+
+        Hyperpriors (conjugate):
+          mu_c,k | sigma2_c,k ~ Normal(mu0_k, sigma2_c,k / kappa0)
+          sigma2_c,k ~ InvGamma(alpha0, beta0)
+
+        Variational updates (moment matching / VB closed forms):
+          q(mu_c,k, sigma2_c,k) = q(mu_c,k | sigma2) q(sigma2_c,k)
+        where updated parameters are:
+          kappa_n = kappa0 + n_c
+          mu_n = (kappa0*mu0 + n_c * mean_Ez) / kappa_n
+          alpha_n = alpha0 + n_c/2
+          beta_n = beta0 + 0.5 * sum_n (E[z^2]_n - 2*E[z]_n*mean_Ez + mean_Ez^2)
+
+        We then use posterior expected values:
+          E[sigma2] = beta_n / (alpha_n - 1)   (for alpha_n>1)
+          E[mu] = mu_n
+
+        Notes: this implements an empirical VB M-step for hyperparameters.
+        """
+        params = self.params
+        if getattr(params, "cohort_labels", None) is None:
+            return
+        labels = params.cohort_labels
+        K = self.K
+        C = int(labels.max() + 1)
+
+        # hyperprior defaults (can be overridden via starting_params)
+        mu0 = getattr(params, "hyper_mu0", np.zeros(K))
+        kappa0 = getattr(params, "hyper_kappa0", 1.0)
+        alpha0 = getattr(params, "hyper_alpha0", 2.0)
+        beta0 = getattr(params, "hyper_beta0", 1.0)
+
+        cohort_mu = np.zeros((C, K))
+        cohort_sigma2 = np.ones((C, K))
+
+        for c in range(C):
+            idx = np.where(labels == c)[0]
+            n_c = idx.size
+            if n_c == 0:
+                continue
+            Ez = self.node_z.E_z[idx]  # (n_c, K)
+            Ez2 = self.node_z.E_z_squared[idx]
+
+            mean_Ez = np.mean(Ez, axis=0)
+
+            # VB posterior params
+            kappa_n = kappa0 + n_c
+            mu_n = (kappa0 * mu0 + n_c * mean_Ez) / kappa_n
+            alpha_n = alpha0 + n_c / 2.0
+
+            # sum of squares term: sum_n E[(z - mean_Ez)^2] + n_c*(mean_Ez - mu_n)^2
+            ss = np.sum(Ez2 - 2 * Ez * mean_Ez + mean_Ez ** 2, axis=0)
+            beta_n = beta0 + 0.5 * ss + 0.5 * (kappa0 * n_c) / kappa_n * (mean_Ez - mu0) ** 2
+
+            # posterior expectations
+            sigma2_post = beta_n / (alpha_n - 1.0)  # requires alpha_n>1
+            sigma2_post = np.maximum(sigma2_post, 1e-6)
+
+            cohort_mu[c] = mu_n
+            cohort_sigma2[c] = sigma2_post
+
+        params.cohort_mu = cohort_mu
+        params.cohort_sigma2 = cohort_sigma2
+
     def update(self, indices: np.ndarray | None = None):
+        # Update cohort parameters from current q(z) BEFORE updating z
+        if getattr(self.params, "cohort_labels", None) is not None:
+            self.update_cohort_params2()
+
         self.node_z.update(indices=indices)
 
         # update W

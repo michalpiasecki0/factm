@@ -37,6 +37,8 @@ class FACTModel(FACTM):
         K: int,
         model_config: ModelConfig,
         seed: int | None = None,
+        starting_params_fa: dict | None = None,
+        starting_params_ctm: list[dict] | None = None,
     ):
         if seed is not None:
             self.seed = seed
@@ -66,6 +68,8 @@ class FACTModel(FACTM):
             views=views,
             K=K,
             model_config=model_config,
+            starting_params_fa=starting_params_fa,
+            starting_params_ctm=starting_params_ctm,
         )
 
         self.__first_fit = True
