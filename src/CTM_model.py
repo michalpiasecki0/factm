@@ -68,6 +68,38 @@ class nodeCTM_Sigma0:
         self.inv_Sigma0 = np.linalg.inv(self.Sigma0)
         self.det_Sigma0 = np.linalg.det(self.Sigma0)
 
+    def svi_update(self, indices: np.ndarray, rho: float) -> None:
+        """Stochastic global update: mix batch MAP-style Sigma0
+        with ρ (MOFA-style SVI)."""
+        idx = np.asarray(indices, dtype=int)
+        if idx.size == 0:
+            return
+
+        centered_mean = (
+            np.asarray(self.eta_node.vi_mu, dtype=float)[idx]
+            - self.mu0_node.mu0
+            - np.asarray(self.w_z_node.E_w_z, dtype=float)[idx]
+        )  # noqa: E501
+
+        n_i = idx.size
+        Ez2w2 = np.sum(
+            np.dot(self.w_z_node.E_z_squared[idx], self.w_z_node.E_w_squared.T),
+            axis=0,
+        )
+        Ezw_2 = np.sum(
+            np.dot(self.w_z_node.E_z[idx] ** 2, self.w_z_node.E_w.T**2), axis=0
+        )
+        cov_sumk_znk_wk = Ez2w2 - Ezw_2
+        vi_var = np.asarray(self.eta_node.vi_var, dtype=float)
+        sigma_batch = (
+            np.dot(centered_mean.T, centered_mean) / n_i
+            + np.diag(np.mean(vi_var[idx], axis=0))
+            + np.diag(cov_sumk_znk_wk / n_i)
+        )
+        self.Sigma0 = (1.0 - rho) * self.Sigma0 + rho * sigma_batch
+        self.inv_Sigma0 = np.linalg.inv(self.Sigma0)
+        self.det_Sigma0 = np.linalg.det(self.Sigma0)
+
 
 class nodeCTM_mu0:
     """
@@ -85,6 +117,17 @@ class nodeCTM_mu0:
 
     def update(self):
         self.mu0 = np.mean(self.eta_node.vi_mu - self.w_z_node.E_w_z, axis=0)
+
+    def svi_update(self, indices: np.ndarray, rho: float) -> None:
+        """Stochastic global update: mix batch mean with ρ."""
+        idx = np.asarray(indices, dtype=int)
+        if idx.size == 0:
+            return
+        gm = np.asarray(self.eta_node.vi_mu, dtype=float) - np.asarray(
+            self.w_z_node.E_w_z, dtype=float
+        )
+        mu_batch = np.mean(gm[idx], axis=0)
+        self.mu0 = (1.0 - rho) * self.mu0 + rho * mu_batch
 
 
 class nodeCTM_w_z:
@@ -401,13 +444,31 @@ class nodeCTM_beta:
 
         self.vi_alpha = vi_alpha
 
-        sum_alpha_tmp = np.sum(vi_alpha, axis=1)
+        self._recompute_beta_cache()
 
+    def _recompute_beta_cache(self) -> None:
+        sum_alpha_tmp = np.sum(self.vi_alpha, axis=1)
         self.lnGamma_sum_vi_alpha = gammaln(sum_alpha_tmp)
-        self.sum_lnGamma_vi_alpha = np.sum(gammaln(vi_alpha), axis=1)
-
+        self.sum_lnGamma_vi_alpha = np.sum(gammaln(self.vi_alpha), axis=1)
         self.digamma_vi_alpha = digamma(self.vi_alpha)
         self.digamma_sum_vi_alpha = digamma(sum_alpha_tmp)
+
+    def svi_update(self, indices: np.ndarray, rho: float) -> None:
+        """
+        Stochastic global update for topic Dirichlet parameters.
+
+        Sum word-count statistics over ``indices`` (typically length N with
+        repeated minibatch indices, matching FA SVI).
+        """
+        vi_alpha_batch = self.alpha * np.ones((self.params.L, self.params.G))
+        for n in indices:
+            nn = int(n)
+            if not self.params.maskNA_N[nn]:
+                vi_alpha_batch += np.dot(
+                    self.xi_node.vi_par[nn].T, self.y_node.data[nn]
+                )
+        self.vi_alpha = (1.0 - rho) * self.vi_alpha + rho * vi_alpha_batch
+        self._recompute_beta_cache()
 
     def ELBO(self):
         elbo = (
@@ -590,6 +651,24 @@ class CTM:
 
         self.node_mu0.update()
         self.node_Sigma0.update()
+
+    def update_svi(self, indices: np.ndarray, rho: float) -> None:
+        """
+        One SVI step: locals on unique indices; globals mixed with ρ using the
+        same repeated-minibatch convention as FA (sums over ``indices``).
+        """
+        idx = np.asarray(indices, dtype=int)
+        uniq = np.unique(idx)
+        self.node_xi.update(indices=uniq)
+        self.node_eta.update(indices=uniq)
+
+        mask_arr = np.asarray(self.params.maskNA_N, dtype=bool)
+        idx_obs = idx[~mask_arr[idx]]
+
+        self.node_beta.svi_update(idx, rho=rho)
+        if idx_obs.size > 0:
+            self.node_mu0.svi_update(idx_obs, rho=rho)
+            self.node_Sigma0.svi_update(idx_obs, rho=rho)
 
     def ELBO(self):
         self.node_xi.ELBO()
