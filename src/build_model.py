@@ -88,7 +88,9 @@ class FACTModel(FACTM):
             raise TypeError("FA_pretrain must be one of the FA_Pretrain enum values.")
 
         # 1. Pre-train each CTM independently
-        for i, (sv, ctm) in enumerate(zip(self.views.structured, self.ctms)):
+        for i, (sv, ctm) in enumerate(
+            zip(self.views.structured, self.ctms, strict=True)
+        ):
             print(f"Pretraining CTM for structured view {i}")
 
             tmp_ctm = CTM(
@@ -183,12 +185,60 @@ class FACTModel(FACTM):
             if pretrain:
                 self.pretrain()
 
+            # One initial deterministic update to populate expectations
             self.update()
             self.ELBO()
             self.elbo_sequence.append(self.get_elbo())
 
         self.__first_fit = False
         print("Fitting model")
+
+        svi = getattr(self.model_config, "svi", None)
+        if svi is not None and svi.enabled:
+            t = 0
+            for it in tqdm(range(max_iter)):
+                if svi.batch_size is not None:
+                    S = min(int(svi.batch_size), self.N)
+                else:
+                    frac = (
+                        svi.batch_fraction
+                        if svi.batch_fraction is not None
+                        else self.model_config.node_update_factor
+                    )
+                    S = max(1, int(round(frac * self.N)))
+
+                indices = np.random.choice(self.N, size=S, replace=False)
+
+                if it < svi.warmup_iters or not svi.stochastic_fa_globals:
+                    # Warmup: keep global updates deterministic/full-data.
+                    self.update(update_factor=float(S) / float(self.N))
+                else:
+                    # Experimental: repeat indices to length N instead of using
+                    # N/S scaling inside the minibatch sufficient statistics.
+                    if svi.repeat_minibatch and S < self.N:
+                        reps = int(np.ceil(float(self.N) / float(S)))
+                        indices = np.tile(indices, reps)[: self.N]
+
+                    rho = float(svi.rho_tau) / (
+                        (1.0 + float(svi.rho_kappa) * float(t)) ** float(svi.rho_power)
+                    )
+                    rho_min, rho_max = svi.rho_clip
+                    rho = float(np.clip(rho, rho_min, rho_max))
+                    self.update_svi(indices=indices, rho=rho)
+                    t += 1
+
+                if (it % svi.elbo_every) == 0:
+                    self.ELBO()
+                    self.elbo_sequence.append(self.get_elbo())
+
+                    if (
+                        elbo_tres
+                        and len(self.elbo_sequence) >= 2
+                        and (self.elbo_sequence[-1] - self.elbo_sequence[-2])
+                        < elbo_tres
+                    ):
+                        break
+            return
 
         for _ in tqdm(range(max_iter)):
             self.update(update_factor=self.model_config.node_update_factor)

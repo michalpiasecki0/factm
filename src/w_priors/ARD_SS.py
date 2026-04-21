@@ -219,3 +219,55 @@ class ARD_SSWPrior(WPriorBase):
     def get_additional_nodes_to_update(self) -> list:
         """ARD_SS prior has alpha and theta nodes to update."""
         return ["alpha", "theta"]
+
+    def svi_target_w_k(
+        self,
+        w_node: "nodeFA_w_m",
+        k: int,
+        z_node: Any,
+        y_node: Any,
+        tau_node: Any,
+        indices,
+    ) -> dict:
+        if indices is None:
+            indices = np.arange(z_node.params.N)
+        if w_node.is_ctm:
+            raise NotImplementedError("SVI globals for CTM-injected W not supported.")
+
+        z_k = z_node.E_z[indices, k]
+        z2_k = z_node.E_z_squared[indices, k]
+
+        nominator_second_term_tmp = np.dot(w_node.E_w, z_node.E_z[indices].T * z_k).T
+        nominator_second_term = nominator_second_term_tmp - np.outer(
+            z_k**2, w_node.E_w[:, k]
+        )
+
+        nominator = np.ma.sum(
+            tau_node.E_tau[indices]
+            * ((y_node.data[indices].T * z_k).T - nominator_second_term),
+            axis=0,
+        )
+        denominator = (
+            np.ma.dot(z2_k, tau_node.E_tau[indices]) + w_node.alpha_m_node.E_alpha[k]
+        )
+
+        mu_hat = nominator / denominator
+        var_hat = 1.0 / denominator
+
+        E_log_LR_theta = w_node.theta_m_node.E_log_LR[k].copy()
+        lambda_k = (
+            E_log_LR_theta
+            + log_eps(w_node.alpha_m_node.E_alpha[k]) / 2
+            + log_eps(denominator) / 2
+            + (nominator**2) / (2 * denominator)
+        )
+        lambda_k[lambda_k > -np.log(EPS)] = -np.log(EPS)
+        lambda_k[lambda_k < np.log(w_node.D - 1)] = np.log(w_node.D - 1)
+        gamma_k = 1.0 / (1.0 + np.exp(-lambda_k))
+
+        return {
+            "mu_hat": mu_hat,
+            "var_hat": var_hat,
+            "lambda": lambda_k,
+            "gamma": gamma_k,
+        }
