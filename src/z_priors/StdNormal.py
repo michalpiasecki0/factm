@@ -100,8 +100,19 @@ class nodeFA_z:
                 first_term = np.dot(E_w_k, self.tau_node[m].Sigma0_inv)
                 vi_mu_new += np.sum(first_term * partial_resid, axis=1)
 
-        vi_var_new = 1 / (vi_var_new + 1)
-        vi_mu_new = vi_mu_new * vi_var_new
+        # Incorporate cohort-specific normal prior if provided
+        if hasattr(self.params, "cohort_labels") and self.params.cohort_labels is not None:
+            cohort_idx = self.params.cohort_labels[indices]
+            prior_mu = self.params.cohort_mu[cohort_idx, k]
+            prior_sigma2 = self.params.cohort_sigma2[cohort_idx, k]
+            prior_precision = 1.0 / prior_sigma2
+
+            vi_var_new = 1.0 / (vi_var_new + prior_precision)
+            vi_mu_new = (vi_mu_new + prior_precision * prior_mu) * vi_var_new
+        else:
+            # standard normal prior (mu=0, sigma2=1)
+            vi_var_new = 1.0 / (vi_var_new + 1)
+            vi_mu_new = vi_mu_new * vi_var_new
 
         self.vi_mu[indices, k] = vi_mu_new
         self.vi_var[indices, k] = vi_var_new
@@ -112,11 +123,40 @@ class nodeFA_z:
         self.E_z_squared = self.vi_var + self.vi_mu**2
 
     def ELBO(self):
-        self.elbo = (
-            self.params.N * self.params.K / 2
-            - np.sum(self.E_z_squared) / 2
-            + np.sum(log_eps(self.vi_var)) / 2
+        # Compute entropy H[q(Z)]
+        # H = 0.5 * sum(log(vi_var)) + 0.5 * N*K * (1 + log(2*pi))
+        H = 0.5 * np.sum(np.log(self.vi_var)) + 0.5 * self.params.N * self.params.K * (
+            1.0 + np.log(2.0 * np.pi)
         )
+
+        # Compute expected log-prior E_q[log p(Z)]
+        params = self.params
+        if getattr(params, "cohort_labels", None) is not None:
+            labels = params.cohort_labels
+            C = int(labels.max() + 1)
+            E_log_p = 0.0
+            for c in range(C):
+                idx = np.where(labels == c)[0]
+                if idx.size == 0:
+                    continue
+                mu_c = params.cohort_mu[c]  # (K,)
+                sigma2_c = params.cohort_sigma2[c]  # (K,)
+                Ez = self.E_z[idx]  # (n_c, K)
+                Ez2 = self.E_z_squared[idx]
+                # sum over n and k
+                term1 = -0.5 * np.sum((Ez2 - 2.0 * Ez * mu_c + mu_c ** 2) / sigma2_c)
+                term2 = -0.5 * idx.size * np.sum(np.log(2.0 * np.pi * sigma2_c))
+                E_log_p += term1 + term2
+        else:
+            # Standard normal prior: p(z)=N(0,1)
+            E_log_p = -0.5 * np.sum(self.E_z_squared) - 0.5 * self.params.N * self.params.K * np.log(
+                2.0 * np.pi
+            )
+
+        # ELBO contribution from Z node
+        elbo = H + E_log_p
+
+        self.elbo = elbo
 
 
 class StdNormalZPrior(ZPriorBase):
@@ -172,8 +212,20 @@ class StdNormalZPrior(ZPriorBase):
                 first_term = np.dot(E_w_k, tau_nodes[m].Sigma0_inv)  # (M,)
                 vi_mu_new += np.sum(first_term * partial_resid, axis=1)
 
-        vi_var_new = 1 / (vi_var_new + 1)
-        vi_mu_new = vi_mu_new * vi_var_new
+        # Incorporate cohort-specific normal prior if provided
+        params = z_node.params
+        if getattr(params, "cohort_labels", None) is not None:
+            cohort_idx = params.cohort_labels[indices]
+            prior_mu = params.cohort_mu[cohort_idx, k]
+            prior_sigma2 = params.cohort_sigma2[cohort_idx, k]
+            prior_precision = 1.0 / prior_sigma2
+
+            vi_var_new = 1.0 / (vi_var_new + prior_precision)
+            vi_mu_new = (vi_mu_new + prior_precision * prior_mu) * vi_var_new
+        else:
+            # standard normal prior (mu=0, sigma2=1)
+            vi_var_new = 1.0 / (vi_var_new + 1)
+            vi_mu_new = vi_mu_new * vi_var_new
 
         z_node.vi_mu[indices, k] = vi_mu_new
         z_node.vi_var[indices, k] = vi_var_new
