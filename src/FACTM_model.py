@@ -160,7 +160,7 @@ class FACTM:
             ctm.node_w_z.E_w_z = w_node_fa.E_w_z.copy()
             ctm.node_w_z.E_w_z_squared = w_node_fa.E_w_z_squared.copy()
 
-            ctm.update(indices=indices)
+            ctm.update_svi(indices=indices, rho=rho)
 
             self.fa.nodelist_y[fa_idx].data = ctm.node_eta.E_eta_minus_mu0.copy()
             self.fa.nodelist_tau[fa_idx].Sigma0_inv = ctm.node_Sigma0.inv_Sigma0.copy()
