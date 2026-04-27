@@ -119,6 +119,7 @@ starting_params_fa = {"cohort_labels": cohort_labels}
 model = FACTModel(views, K, model_config, seed=0, starting_params_fa=starting_params_fa)
 ```
 
+
 - In `run_cohort.ipynb`, cohort training currently uses the preferred explicit path:
   - `views = Views.from_list(..., cohorts=cohort_codes)`
   - `z_priors=[ZPrior.COHORT] * K`
