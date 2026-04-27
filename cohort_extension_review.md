@@ -54,8 +54,8 @@ Mapping in code:
 - **Method:** `_update_cohort_params` (lines ~146-185)
 
 #### Delta update
-- $$\operatorname{Var}(\delta_{c,k}) = \left(E[\lambda_k] + E[\tau_{c,k}]E[\gamma_{c,k}]|N_c|\right)^{-1}$$
-- $$E[\delta_{c,k}] = \operatorname{Var}(\delta_{c,k})E[\tau_{c,k}]E[\gamma_{c,k}]\sum_{n\in N_c}E[z_{n,k}]$$
+- $$\text{Var}(\delta_{c,k}) = \left(E[\lambda_k] + E[\tau_{c,k}]E[\gamma_{c,k}]|N_c|\right)^{-1}$$
+- $$E[\delta_{c,k}] = \text{Var}(\delta_{c,k})E[\tau_{c,k}]E[\gamma_{c,k}]\sum_{n\in N_c}E[z_{n,k}]$$
 - Code: lines ~161-164.
 
 #### Gamma update
@@ -118,7 +118,6 @@ Mapping in code:
 starting_params_fa = {"cohort_labels": cohort_labels}
 model = FACTModel(views, K, model_config, seed=0, starting_params_fa=starting_params_fa)
 ```
-
 
 - In `run_cohort.ipynb`, cohort training currently uses the preferred explicit path:
   - `views = Views.from_list(..., cohorts=cohort_codes)`
