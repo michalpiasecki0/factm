@@ -43,3 +43,4 @@ class ZPrior(Enum):
 
     STD_NORMAL = "stdN"
     INFORMED = "informed"
+    COHORT = "cohort"

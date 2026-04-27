@@ -11,7 +11,7 @@ Views           - container that holds simple and structured views
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Union
+from typing import Any, List, Union
 
 import numpy as np
 
@@ -88,10 +88,12 @@ class Views:
     ----------
     simple:     list of SimpleView (Normal / Bernoulli FA likelihoods)
     structured: list of StructuredView (CTM likelihoods)
+    cohorts:    optional 1D array-like of cohort labels (length N)
     """
 
     simple: List[SimpleView] = field(default_factory=list)
     structured: List[StructuredView] = field(default_factory=list)
+    cohorts: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         if not self.simple and not self.structured:
@@ -102,6 +104,19 @@ class Views:
             raise ValueError(
                 f"All views must have the same number of samples N, got: {all_n}"
             )
+
+        if self.cohorts is not None:
+            cohort_arr = np.asarray(self.cohorts)
+            if cohort_arr.ndim != 1:
+                raise ValueError(
+                    "Views.cohorts must be a 1D array-like with one label per sample."
+                )
+            if len(cohort_arr) != self.N:
+                raise ValueError(
+                    "Views.cohorts length must match number of samples N. "
+                    f"Got {len(cohort_arr)} and N={self.N}."
+                )
+            self.cohorts = cohort_arr
 
     @property
     def N(self) -> int:
@@ -119,7 +134,11 @@ class Views:
         return len(self.structured)
 
     @classmethod
-    def from_list(cls, data: list) -> "Views":
+    def from_list(
+        cls,
+        data: list[Any],
+        cohorts: np.ndarray | list[Any] | None = None,
+    ) -> "Views":
         """
         Build a :class:`Views` from a list of arrays or lists-of-arrays.
 
@@ -131,6 +150,7 @@ class Views:
         Examples
         --------
         >>> Views.from_list([rna_matrix, atac_matrix, cell_counts_per_sample])
+        >>> Views.from_list([rna_matrix], cohorts=sample_cohorts)
         """
         simple = []
         structured = []
@@ -144,4 +164,5 @@ class Views:
                     f"Element at index {i} has unsupported type {type(el)}. "
                     "Expected np.ndarray Simple or list[np.ndarray] Structured."
                 )
-        return cls(simple=simple, structured=structured)
+        cohort_arr = None if cohorts is None else np.asarray(cohorts)
+        return cls(simple=simple, structured=structured, cohorts=cohort_arr)

@@ -79,7 +79,6 @@ class nodeFA_z:
                 self.E_z[indices], self.w_node[m].E_w.T
             )
             partial_resid = resid + np.outer(E_z_k, E_w_k)
-            print(self.tau_node[m].E_tau.shape)
             if not self.tau_node[m].is_ctm:
                 vi_var_new += np.ma.dot(
                     self.tau_node[m].E_tau[indices], self.w_node[m].E_w_squared[:, k]
@@ -112,11 +111,25 @@ class nodeFA_z:
         self.E_z_squared = self.vi_var + self.vi_mu**2
 
     def ELBO(self):
-        self.elbo = (
-            self.params.N * self.params.K / 2
-            - np.sum(self.E_z_squared) / 2
-            + np.sum(log_eps(self.vi_var)) / 2
-        )
+        elbo = 0.0
+        for k in range(self.params.K):
+            prior_k = None
+            if self.z_priors is not None:
+                prior_k = self.z_priors[k]
+
+            prior_elbo = None
+            if prior_k is not None and hasattr(prior_k, "compute_elbo_k"):
+                prior_elbo = prior_k.compute_elbo_k(self, k)
+
+            if prior_elbo is not None:
+                elbo += prior_elbo
+            else:
+                elbo += (
+                    self.params.N / 2
+                    - np.sum(self.E_z_squared[:, k]) / 2
+                    + np.sum(log_eps(self.vi_var[:, k])) / 2
+                )
+        self.elbo = elbo
 
 
 class StdNormalZPrior(ZPriorBase):

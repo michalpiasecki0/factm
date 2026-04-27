@@ -11,6 +11,8 @@ ModelConfig holds the two lists separately, mirroring the Views container.
 from dataclasses import dataclass, field
 from typing import List
 
+import numpy as np
+
 from .enums import Likelihood, WPrior, ZPrior
 from .likelihoods.fa.Bernoulli import BernoulliLikelihood
 from .likelihoods.fa.Normal import NormalLikelihood
@@ -163,6 +165,30 @@ class StructuredViewConfig:
         return create_w_prior(self.w_prior)
 
 
+@dataclass
+class CohortPriorConfig:
+    """Hyperparameters for the cohort-aware latent-factor prior."""
+
+    pi: float | List[float] = 0.5
+    a_lambda: float = 1.0
+    b_lambda: float = 1.0
+    a0_tau: float = 1.0
+    b0_tau: float = 1.0
+
+    def __post_init__(self) -> None:
+        if isinstance(self.pi, list):
+            if not self.pi:
+                raise ValueError("cohort_prior_config.pi list must not be empty.")
+            if any((p <= 0.0 or p >= 1.0) for p in self.pi):
+                raise ValueError("All cohort_prior_config.pi values must be in (0, 1).")
+        elif not (0.0 < self.pi < 1.0):
+            raise ValueError("cohort_prior_config.pi must be in (0, 1).")
+
+        for name in ("a_lambda", "b_lambda", "a0_tau", "b0_tau"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"cohort_prior_config.{name} must be > 0.")
+
+
 # ---------------------------------------------------------------------------
 # Top-level model configuration
 # ---------------------------------------------------------------------------
@@ -183,12 +209,14 @@ class ModelConfig:
     structured_view_configs: list of StructuredViewConfig (one per CTM view)
     z_priors:                list of ZPrior (one per latent factor)
     node_update_factor:      fraction of view nodes to update per step (0, 1];
+    cohort_prior_config:     hyperparameters for ZPrior.COHORT
     """
 
     simple_view_configs: List[SimpleViewConfig]
     structured_view_configs: List[StructuredViewConfig]
     z_priors: List[ZPrior]
     node_update_factor: float = 1.0
+    cohort_prior_config: CohortPriorConfig = field(default_factory=CohortPriorConfig)
     svi: SVIConfig = field(default_factory=SVIConfig)
 
     def __post_init__(self) -> None:
@@ -196,6 +224,14 @@ class ModelConfig:
             raise ValueError("Must have at least one view configuration.")
         if not self.z_priors:
             raise ValueError("Must have at least one Z prior.")
+
+        if isinstance(self.cohort_prior_config.pi, list):
+            pi_len = len(self.cohort_prior_config.pi)
+            if pi_len not in (1, len(self.z_priors)):
+                raise ValueError(
+                    "cohort_prior_config.pi list must have length 1 or match "
+                    f"number of factors ({len(self.z_priors)}), got {pi_len}."
+                )
 
         if not (0 < self.node_update_factor <= 1):
             raise ValueError(
@@ -284,6 +320,10 @@ class ModelConfig:
         """L values for CTM views only."""
         return [c.L for c in self.structured_view_configs]
 
-    def create_z_priors(self):
+    def create_z_priors(self, cohorts: np.ndarray | None = None):
         """Create Z prior objects for all factors."""
-        return create_z_priors(self.z_priors)
+        return create_z_priors(
+            self.z_priors,
+            cohort_prior_config=self.cohort_prior_config,
+            cohorts=cohorts,
+        )

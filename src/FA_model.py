@@ -238,7 +238,10 @@ class FA:
             starting_params.setdefault(m, {})
 
         z_mean, z_var = starting_params_z(starting_params, self.N, self.K)
-        z_prior_objs = model_config.create_z_priors()
+        cohorts = views.cohorts
+        if cohorts is None and "cohort_labels" in starting_params:
+            cohorts = np.asarray(starting_params["cohort_labels"])
+        z_prior_objs = model_config.create_z_priors(cohorts=cohorts)
         self.node_z = nodeFA_z(
             vi_mu=z_mean,
             vi_var=z_var,

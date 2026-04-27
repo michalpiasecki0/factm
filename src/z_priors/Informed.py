@@ -3,6 +3,8 @@ Informed prior for latent factors Z (not yet implemented).
 """
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from .base import ZPriorBase
 
 if TYPE_CHECKING:
@@ -13,7 +15,13 @@ class InformedZPrior(ZPriorBase):
     """Informed prior for latent factors Z (placeholder for future implementation)."""
 
     def update_z_k(
-        self, z_node: "nodeFA_z", k: int, w_nodes: list, tau_nodes: list, y_nodes: list
+        self,
+        z_node: "nodeFA_z",
+        k: int,
+        w_nodes: list,
+        tau_nodes: list,
+        y_nodes: list,
+        indices: np.ndarray | None = None,
     ):
         """Update Z node for factor k for informed prior (not yet implemented)."""
         # TODO: Implement Informed prior
