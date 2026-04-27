@@ -40,12 +40,8 @@ Definitions in code:
 - **Method:** `update_z_k` (lines ~83-145)
 
 Implemented form:
-- \[
-\sigma_{n,k}^{2} = \left(E[\tau_{c(n),k}] + \sum_{m,d} E[\tau_{n,d}^{m}]E[w_{d,k}^{m2}] + \text{CTM term}\right)^{-1}
-\]
-- \[
-\mu_{n,k} = \sigma_{n,k}^{2}\left(E[\tau_{c(n),k}]E[\gamma_{c(n),k}]E[\delta_{c(n),k}] + \sum_{m,d}E[\tau_{n,d}^{m}]E[w_{d,k}^{m}]y_{n,d}^{m} + \text{CTM term}\right)
-\]
+- $$\sigma_{n,k}^{2} = \left(E[\tau_{c(n),k}] + \sum_{m,d} E[\tau_{n,d}^{m}]E[w_{d,k}^{m2}] + \text{CTM term}\right)^{-1}$$
+- $$\mu_{n,k} = \sigma_{n,k}^{2}\left(E[\tau_{c(n),k}]E[\gamma_{c(n),k}]E[\delta_{c(n),k}] + \sum_{m,d}E[\tau_{n,d}^{m}]E[w_{d,k}^{m}]y_{n,d}^{m} + \text{CTM term}\right)$$
 
 Mapping in code:
 - prior part: lines ~98-105,
@@ -58,33 +54,21 @@ Mapping in code:
 - **Method:** `_update_cohort_params` (lines ~146-185)
 
 #### Delta update
-- \[
-\operatorname{Var}(\delta_{c,k}) = \left(E[\lambda_k] + E[\tau_{c,k}]E[\gamma_{c,k}]|N_c|\right)^{-1}
-\]
-- \[
-E[\delta_{c,k}] = \operatorname{Var}(\delta_{c,k})E[\tau_{c,k}]E[\gamma_{c,k}]\sum_{n\in N_c}E[z_{n,k}]
-\]
+- $$\operatorname{Var}(\delta_{c,k}) = \left(E[\lambda_k] + E[\tau_{c,k}]E[\gamma_{c,k}]|N_c|\right)^{-1}$$
+- $$E[\delta_{c,k}] = \operatorname{Var}(\delta_{c,k})E[\tau_{c,k}]E[\gamma_{c,k}]\sum_{n\in N_c}E[z_{n,k}]$$
 - Code: lines ~161-164.
 
 #### Gamma update
-- \[
-u_{c,k}=\log\frac{\pi_k}{1-\pi_k}-\frac12E[\tau_{c,k}]\sum_{n\in N_c}\left(E[\delta_{c,k}^{2}]-2E[\delta_{c,k}]E[z_{n,k}]\right),\quad E[\gamma_{c,k}]=\sigma(u_{c,k})
-\]
+- $$u_{c,k}=\log\frac{\pi_k}{1-\pi_k}-\frac12E[\tau_{c,k}]\sum_{n\in N_c}\left(E[\delta_{c,k}^{2}]-2E[\delta_{c,k}]E[z_{n,k}]\right),\quad E[\gamma_{c,k}]=\sigma(u_{c,k})$$
 - Code: lines ~166-171.
 
 #### Tau update
-- \[
-a^{(\tau)}_{c,k}=a_0^\tau+\frac{|N_c|}{2}
-\]
-- \[
-b^{(\tau)}_{c,k}=b_0^\tau+\frac12\sum_{n\in N_c}\left(E[z_{n,k}^2]-2E[\gamma_{c,k}]E[\delta_{c,k}]E[z_{n,k}] + E[\gamma_{c,k}]E[\delta_{c,k}^2]\right)
-\]
+- $$a^{(\tau)}_{c,k}=a_0^\tau+\frac{|N_c|}{2}$$
+- $$b^{(\tau)}_{c,k}=b_0^\tau+\frac12\sum_{n\in N_c}\left(E[z_{n,k}^2]-2E[\gamma_{c,k}]E[\delta_{c,k}]E[z_{n,k}] + E[\gamma_{c,k}]E[\delta_{c,k}^2]\right)$$
 - Code: lines ~173-180.
 
 #### Lambda update
-- \[
-a_k^{(\lambda)}=a^\lambda+\frac{C}{2},\quad b_k^{(\lambda)}=b^\lambda+\frac12\sum_cE[\delta_{c,k}^2]
-\]
+- $$a_k^{(\lambda)}=a^\lambda+\frac{C}{2},\quad b_k^{(\lambda)}=b^\lambda+\frac12\sum_cE[\delta_{c,k}^2]$$
 - Code: lines ~182-185.
 
 ## Where ELBO changes are handled
