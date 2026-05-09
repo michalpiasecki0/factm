@@ -45,6 +45,45 @@ class nodeCTM_Sigma0:
         self.w_z_node = w_z_node
         self.mu0_node = mu0_node
 
+    def _sigma_batch_from_centered_mean(
+        self,
+        centered_mean: np.ndarray,
+        cov_sumk_znk_wk: np.ndarray,
+        vi_var_mean: np.ndarray,
+        denom: int,
+    ) -> np.ndarray:
+        return (
+            np.dot(centered_mean.T, centered_mean) / denom
+            + np.diag(vi_var_mean)
+            + np.diag(cov_sumk_znk_wk / denom)
+        )
+
+    def _sigma_batch_from_indices(self, idx: np.ndarray) -> np.ndarray:
+        centered_mean = (
+            np.asarray(self.eta_node.vi_mu, dtype=float)[idx]
+            - self.mu0_node.mu0
+            - np.asarray(self.w_z_node.E_w_z, dtype=float)[idx]
+        )
+
+        denom = int(idx.size)
+        Ez2w2 = np.sum(
+            np.dot(self.w_z_node.E_z_squared[idx], self.w_z_node.E_w_squared.T),
+            axis=0,
+        )
+        Ezw_2 = np.sum(
+            np.dot(self.w_z_node.E_z[idx] ** 2, self.w_z_node.E_w.T**2), axis=0
+        )
+        cov_sumk_znk_wk = Ez2w2 - Ezw_2
+
+        vi_var = np.asarray(self.eta_node.vi_var, dtype=float)
+        vi_var_mean = np.mean(vi_var[idx], axis=0)
+        return self._sigma_batch_from_centered_mean(
+            centered_mean=centered_mean,
+            cov_sumk_znk_wk=cov_sumk_znk_wk,
+            vi_var_mean=vi_var_mean,
+            denom=denom,
+        )
+
     def update(self):
         centered_mean = self.eta_node.vi_mu - self.mu0_node.mu0 - self.w_z_node.E_w_z
 
@@ -59,10 +98,11 @@ class nodeCTM_Sigma0:
 
         n = self.params.N - np.sum(self.params.maskNA_N)
 
-        self.Sigma0 = (
-            np.dot(centered_mean.T, centered_mean) / n
-            + np.diag(np.mean(self.eta_node.vi_var, axis=0))
-            + np.diag(cov_sumk_znk_wk) / n
+        self.Sigma0 = self._sigma_batch_from_centered_mean(
+            centered_mean=centered_mean,
+            cov_sumk_znk_wk=cov_sumk_znk_wk,
+            vi_var_mean=np.mean(self.eta_node.vi_var, axis=0),
+            denom=int(n),
         )
 
         self.inv_Sigma0 = np.linalg.inv(self.Sigma0)
@@ -74,28 +114,7 @@ class nodeCTM_Sigma0:
         idx = np.asarray(indices, dtype=int)
         if idx.size == 0:
             return
-
-        centered_mean = (
-            np.asarray(self.eta_node.vi_mu, dtype=float)[idx]
-            - self.mu0_node.mu0
-            - np.asarray(self.w_z_node.E_w_z, dtype=float)[idx]
-        )  # noqa: E501
-
-        n_i = idx.size
-        Ez2w2 = np.sum(
-            np.dot(self.w_z_node.E_z_squared[idx], self.w_z_node.E_w_squared.T),
-            axis=0,
-        )
-        Ezw_2 = np.sum(
-            np.dot(self.w_z_node.E_z[idx] ** 2, self.w_z_node.E_w.T**2), axis=0
-        )
-        cov_sumk_znk_wk = Ez2w2 - Ezw_2
-        vi_var = np.asarray(self.eta_node.vi_var, dtype=float)
-        sigma_batch = (
-            np.dot(centered_mean.T, centered_mean) / n_i
-            + np.diag(np.mean(vi_var[idx], axis=0))
-            + np.diag(cov_sumk_znk_wk / n_i)
-        )
+        sigma_batch = self._sigma_batch_from_indices(idx)
         self.Sigma0 = (1.0 - rho) * self.Sigma0 + rho * sigma_batch
         self.inv_Sigma0 = np.linalg.inv(self.Sigma0)
         self.det_Sigma0 = np.linalg.det(self.Sigma0)
@@ -115,18 +134,22 @@ class nodeCTM_mu0:
         self.eta_node = eta_node
         self.w_z_node = w_z_node
 
+    def _mu_batch_from_indices(self, idx: np.ndarray) -> np.ndarray:
+        gm = np.asarray(self.eta_node.vi_mu, dtype=float) - np.asarray(
+            self.w_z_node.E_w_z, dtype=float
+        )
+        return np.mean(gm[idx], axis=0)
+
     def update(self):
-        self.mu0 = np.mean(self.eta_node.vi_mu - self.w_z_node.E_w_z, axis=0)
+        idx = np.arange(self.params.N, dtype=int)
+        self.mu0 = self._mu_batch_from_indices(idx)
 
     def svi_update(self, indices: np.ndarray, rho: float) -> None:
         """Stochastic global update: mix batch mean with ρ."""
         idx = np.asarray(indices, dtype=int)
         if idx.size == 0:
             return
-        gm = np.asarray(self.eta_node.vi_mu, dtype=float) - np.asarray(
-            self.w_z_node.E_w_z, dtype=float
-        )
-        mu_batch = np.mean(gm[idx], axis=0)
+        mu_batch = self._mu_batch_from_indices(idx)
         self.mu0 = (1.0 - rho) * self.mu0 + rho * mu_batch
 
 
@@ -435,14 +458,18 @@ class nodeCTM_beta:
         self.xi_node = xi_node
         self.y_node = y_node
 
+    def _vi_alpha_batch_from_indices(self, indices) -> np.ndarray:
+        vi_alpha_batch = self.alpha * np.ones((self.params.L, self.params.G))
+        for n in indices:
+            nn = int(n)
+            if not self.params.maskNA_N[nn]:
+                vi_alpha_batch += np.dot(
+                    self.xi_node.vi_par[nn].T, self.y_node.data[nn]
+                )
+        return vi_alpha_batch
+
     def update(self):
-        vi_alpha = self.alpha * np.ones((self.params.L, self.params.G))
-
-        for n in range(self.params.N):
-            if not self.params.maskNA_N[n]:
-                vi_alpha += np.dot(self.xi_node.vi_par[n].T, self.y_node.data[n])
-
-        self.vi_alpha = vi_alpha
+        self.vi_alpha = self._vi_alpha_batch_from_indices(range(self.params.N))
 
         self._recompute_beta_cache()
 
@@ -460,13 +487,7 @@ class nodeCTM_beta:
         Sum word-count statistics over ``indices`` (typically length N with
         repeated minibatch indices, matching FA SVI).
         """
-        vi_alpha_batch = self.alpha * np.ones((self.params.L, self.params.G))
-        for n in indices:
-            nn = int(n)
-            if not self.params.maskNA_N[nn]:
-                vi_alpha_batch += np.dot(
-                    self.xi_node.vi_par[nn].T, self.y_node.data[nn]
-                )
+        vi_alpha_batch = self._vi_alpha_batch_from_indices(indices)
         self.vi_alpha = (1.0 - rho) * self.vi_alpha + rho * vi_alpha_batch
         self._recompute_beta_cache()
 

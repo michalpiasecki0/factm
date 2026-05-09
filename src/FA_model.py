@@ -119,6 +119,67 @@ class nodeFA_w_m:
     def ELBO(self):
         self.elbo = self.w_prior.compute_elbo(self)
 
+    @staticmethod
+    def _ema_inplace(curr: np.ndarray, target: np.ndarray, rho: float) -> np.ndarray:
+        return (1.0 - rho) * curr + rho * target
+
+    def _svi_update_w_params_for_k(self, k: int, targets: dict, rho: float) -> None:
+        if self.w_m_node_not_sparse is not None:
+            self.w_m_node_not_sparse.vi_mu[:, k] = self._ema_inplace(
+                self.w_m_node_not_sparse.vi_mu[:, k], targets["mu"], rho
+            )
+            self.w_m_node_not_sparse.vi_var[:, k] = self._ema_inplace(
+                self.w_m_node_not_sparse.vi_var[:, k], targets["var"], rho
+            )
+            return
+
+        if "mu" in targets:
+            self.hat_w_m_node.vi_mu[:, k] = self._ema_inplace(
+                self.hat_w_m_node.vi_mu[:, k], targets["mu"], rho
+            )
+            self.hat_w_m_node.vi_var[:, k] = self._ema_inplace(
+                self.hat_w_m_node.vi_var[:, k], targets["var"], rho
+            )
+            return
+
+        # Spike-and-slab-style targets
+        self.hat_w_m_node.vi_mu[:, k] = self._ema_inplace(
+            self.hat_w_m_node.vi_mu[:, k], targets["mu_hat"], rho
+        )
+        self.hat_w_m_node.vi_var[:, k] = self._ema_inplace(
+            self.hat_w_m_node.vi_var[:, k], targets["var_hat"], rho
+        )
+
+        self.s_m_node.vi_lambda[:, k] = self._ema_inplace(
+            self.s_m_node.vi_lambda[:, k], targets["lambda"], rho
+        )
+        self.s_m_node.vi_gamma[:, k] = 1.0 / (
+            1.0 + np.exp(-self.s_m_node.vi_lambda[:, k])
+        )
+
+    def _svi_update_alpha_for_k(self, k: int, rho: float) -> None:
+        if self.alpha_m_node is None:
+            return
+        vi_b_target = self.alpha_m_node.b0 + np.sum(self.E_hat_w_squared[:, k]) / 2
+        self.alpha_m_node.vi_b[k] = self._ema_inplace(
+            self.alpha_m_node.vi_b[k], vi_b_target, rho
+        )
+        self.alpha_m_node.update_params()
+
+    def _svi_update_theta_for_k(self, k: int, rho: float) -> None:
+        if self.theta_m_node is None or self.s_m_node is None:
+            return
+        sum_sdk = np.sum(self.s_m_node.vi_gamma[:, k])
+        vi_a_target = self.theta_m_node.a0 + sum_sdk
+        vi_b_target = self.theta_m_node.b0 - sum_sdk + self.D
+        self.theta_m_node.vi_a[k] = self._ema_inplace(
+            self.theta_m_node.vi_a[k], vi_a_target, rho
+        )
+        self.theta_m_node.vi_b[k] = self._ema_inplace(
+            self.theta_m_node.vi_b[k], vi_b_target, rho
+        )
+        self.theta_m_node.update_params()
+
     def svi_update(self, indices: np.ndarray, rho: float):
         """
         Stochastic mean-field update for global W (+ sparsity nodes).
@@ -133,58 +194,11 @@ class nodeFA_w_m:
                 self, k, self.z_node, self.y_m_node, self.tau_m_node, indices
             )
 
-            if self.w_m_node_not_sparse is not None:
-                self.w_m_node_not_sparse.vi_mu[:, k] = (
-                    1.0 - rho
-                ) * self.w_m_node_not_sparse.vi_mu[:, k] + rho * targets["mu"]
-                self.w_m_node_not_sparse.vi_var[:, k] = (
-                    1.0 - rho
-                ) * self.w_m_node_not_sparse.vi_var[:, k] + rho * targets["var"]
-            else:
-                if "mu" in targets:
-                    self.hat_w_m_node.vi_mu[:, k] = (
-                        1.0 - rho
-                    ) * self.hat_w_m_node.vi_mu[:, k] + rho * targets["mu"]
-                    self.hat_w_m_node.vi_var[:, k] = (
-                        1.0 - rho
-                    ) * self.hat_w_m_node.vi_var[:, k] + rho * targets["var"]
-                else:
-                    self.hat_w_m_node.vi_mu[:, k] = (
-                        1.0 - rho
-                    ) * self.hat_w_m_node.vi_mu[:, k] + rho * targets["mu_hat"]
-                    self.hat_w_m_node.vi_var[:, k] = (
-                        1.0 - rho
-                    ) * self.hat_w_m_node.vi_var[:, k] + rho * targets["var_hat"]
-
-                    self.s_m_node.vi_lambda[:, k] = (
-                        1.0 - rho
-                    ) * self.s_m_node.vi_lambda[:, k] + rho * targets["lambda"]
-                    self.s_m_node.vi_gamma[:, k] = 1.0 / (
-                        1.0 + np.exp(-self.s_m_node.vi_lambda[:, k])
-                    )
-
+            self._svi_update_w_params_for_k(k, targets=targets, rho=rho)
             self.update_params()
 
-            if self.alpha_m_node is not None:
-                vi_b_target = (
-                    self.alpha_m_node.b0 + np.sum(self.E_hat_w_squared[:, k]) / 2
-                )
-                self.alpha_m_node.vi_b[k] = (1.0 - rho) * self.alpha_m_node.vi_b[
-                    k
-                ] + rho * vi_b_target
-                self.alpha_m_node.update_params()
-
-            if self.theta_m_node is not None and self.s_m_node is not None:
-                sum_sdk = np.sum(self.s_m_node.vi_gamma[:, k])
-                vi_a_target = self.theta_m_node.a0 + sum_sdk
-                vi_b_target = self.theta_m_node.b0 - sum_sdk + self.D
-                self.theta_m_node.vi_a[k] = (1.0 - rho) * self.theta_m_node.vi_a[
-                    k
-                ] + rho * vi_a_target
-                self.theta_m_node.vi_b[k] = (1.0 - rho) * self.theta_m_node.vi_b[
-                    k
-                ] + rho * vi_b_target
-                self.theta_m_node.update_params()
+            self._svi_update_alpha_for_k(k, rho=rho)
+            self._svi_update_theta_for_k(k, rho=rho)
 
         self.update_params_z()
 

@@ -61,10 +61,7 @@ class nodeFA_tau_m:
             self.update_params()
 
     def update(self):
-        self.update_params_w_z()
-        self.vi_b = self.b0 + np.ma.sum(self.E_resid_squared_half, axis=0)
-
-        self.update_params()
+        self._update_vi_b_and_params()
 
     def svi_update(self, indices: np.ndarray, rho: float):
         """
@@ -72,12 +69,29 @@ class nodeFA_tau_m:
         """
         if self.is_ctm:
             return
+        self._update_vi_b_and_params(indices=indices, rho=rho)
+
+    def _update_vi_b_and_params(
+        self, indices: np.ndarray | None = None, rho: float | None = None
+    ):
+        """
+        Shared update logic for both full-batch and stochastic (minibatch) updates.
+
+        - If `rho` is None: do a full replacement update for `vi_b`.
+        - If `rho` is provided: do an exponential moving average update using `rho`.
+        """
         if indices is None:
             indices = np.arange(self.params.N)
+
         self.update_params_w_z()
-        batch_sum = np.ma.sum(self.E_resid_squared_half[indices], axis=0)
-        vi_b_target = self.b0 + batch_sum
-        self.vi_b = (1.0 - rho) * self.vi_b + rho * vi_b_target
+        resid_sum = np.ma.sum(self.E_resid_squared_half[indices], axis=0)
+        vi_b_target = self.b0 + resid_sum
+
+        if rho is None:
+            self.vi_b = vi_b_target
+        else:
+            self.vi_b = (1.0 - rho) * self.vi_b + rho * vi_b_target
+
         self.update_params()
 
     def update_all_params(self):
