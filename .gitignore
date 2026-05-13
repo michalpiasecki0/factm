@@ -8,3 +8,5 @@ data
 *.pdf
 *.png
 *.csv
+.claude
+w_loading_tests.executed.ipynb
