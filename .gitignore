@@ -10,3 +10,4 @@ data
 *.csv
 .claude
 w_loading_tests.executed.ipynb
+Su_*
