@@ -163,8 +163,17 @@ class CohortZPrior(ZPriorBase):
         self.delta_mu = self.delta_var * self.E_tau * (self.E_gamma) * sum_z
         self._update_expectations()
 
+        # Gamma update uses the conditional delta (what delta would be if gamma=1).
+        # This prevents self-reinforcing collapse: when E_gamma→0 the marginal
+        # delta collapses to (0, 1/lambda), making gamma_u ≈ -E_tau*counts/2 so
+        # gamma can never recover. Using the conditional avoids that trap.
+        delta_prec_cond = self.E_lambda + self.E_tau * counts
+        delta_var_cond = 1.0 / np.maximum(delta_prec_cond, EPS)
+        delta_mu_cond = delta_var_cond * self.E_tau * sum_z
+        delta_sq_cond = delta_var_cond + delta_mu_cond ** 2
+
         gamma_u = self.logit_pi - 0.5 * self.E_tau * (
-            counts * self.E_delta_squared - 2.0 * self.E_delta * sum_z
+            counts * delta_sq_cond - 2.0 * delta_mu_cond * sum_z
         )
         gamma_u = np.clip(gamma_u, -60.0, 60.0)
         self.gamma_prob = np.clip(1.0 / (1.0 + np.exp(-gamma_u)), EPS, 1.0 - EPS)
