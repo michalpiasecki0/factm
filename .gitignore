@@ -6,3 +6,6 @@ data
 * text=auto
 *DS_Store*
 fitted_factm
+*.joblib
+*copy*.ipynb
+*bad.ipynb
