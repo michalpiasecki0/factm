@@ -11,27 +11,21 @@ from typing import List
 
 import numpy as np
 
-from .enums import Likelihood
 from .model_config import ModelConfig, SimpleViewConfig
 from .nodes import nodeFA_tau_m, nodeFA_y_m
 from .starting_params import starting_params_z
 from .views import Views
 from .z_priors.StdNormal import nodeFA_z
 
-EPS = 1e-20
-
 
 @dataclass
 class FAParams:
     """Shared parameters for Factor Analysis model."""
 
-    N: int  # number of observations (samples)
-    K: int  # number of hidden factors
-    D: List[int]  # number of features per simple view
-    M: int  # number of simple views
-    likelihoods: List[Likelihood]
+    N: int
+    K: int
+    D: List[int]
     Z_priors: list
-    W_priors: List[str]
 
 
 class nodeFA_w_m:
@@ -239,10 +233,7 @@ class FA:
             N=self.N,
             K=self.K,
             D=self.D,
-            M=self.M,
-            likelihoods=[c.likelihood for c in self.simple_view_configs],
             Z_priors=model_config.z_priors,
-            W_priors=[c.w_prior for c in self.simple_view_configs],
         )
 
         # Starting params
@@ -284,21 +275,9 @@ class FA:
             prior_nodes = w_prior_obj.create_nodes(
                 m, self.params, starting_params, self.D[m], K
             )
-            self.nodelist_w_not_sparse.append(prior_nodes["w_m_node_not_sparse"])
-            self.nodelist_hat_w.append(prior_nodes["hat_w_m_node"])
-            self.nodelist_s.append(prior_nodes["s_m_node"])
-            self.nodelist_alpha.append(prior_nodes["alpha_m_node"])
-            self.nodelist_theta.append(prior_nodes["theta_m_node"])
-
-            node_w_m = nodeFA_w_m(
-                m, params=self.params, w_prior=w_prior_obj, D=self.D[m], is_ctm=False
+            self._register_w_prior_nodes(
+                m, w_prior_obj, prior_nodes, self.D[m], is_ctm=False
             )
-            node_w_m.w_m_node_not_sparse = prior_nodes["w_m_node_not_sparse"]
-            node_w_m.hat_w_m_node = prior_nodes["hat_w_m_node"]
-            node_w_m.s_m_node = prior_nodes["s_m_node"]
-            node_w_m.alpha_m_node = prior_nodes["alpha_m_node"]
-            node_w_m.theta_m_node = prior_nodes["theta_m_node"]
-            self.nodelist_w.append(node_w_m)
 
             node_tau_m = nodeFA_tau_m(
                 0.001, 0.001, m, params=self.params, D=self.D[m], is_ctm=False
@@ -306,6 +285,57 @@ class FA:
             self.nodelist_tau.append(node_tau_m)
 
         self.elbo = 0
+
+    def _register_w_prior_nodes(
+        self,
+        m: int,
+        w_prior,
+        prior_nodes: dict,
+        D_m: int,
+        *,
+        is_ctm: bool,
+    ) -> nodeFA_w_m:
+        self.nodelist_w_not_sparse.append(prior_nodes["w_m_node_not_sparse"])
+        self.nodelist_hat_w.append(prior_nodes["hat_w_m_node"])
+        self.nodelist_s.append(prior_nodes["s_m_node"])
+        self.nodelist_alpha.append(prior_nodes["alpha_m_node"])
+        self.nodelist_theta.append(prior_nodes["theta_m_node"])
+
+        node_w_m = nodeFA_w_m(
+            m, params=self.params, w_prior=w_prior, D=D_m, is_ctm=is_ctm
+        )
+        node_w_m.w_m_node_not_sparse = prior_nodes["w_m_node_not_sparse"]
+        node_w_m.hat_w_m_node = prior_nodes["hat_w_m_node"]
+        node_w_m.s_m_node = prior_nodes["s_m_node"]
+        node_w_m.alpha_m_node = prior_nodes["alpha_m_node"]
+        node_w_m.theta_m_node = prior_nodes["theta_m_node"]
+        self.nodelist_w.append(node_w_m)
+        return node_w_m
+
+    def _mb_w_sparsity_nodes(self, m: int) -> None:
+        additional_nodes = self.nodelist_w[m].w_prior.get_additional_nodes_to_update()
+        if "alpha" in additional_nodes and self.nodelist_alpha[m] is not None:
+            self.nodelist_alpha[m].MB(
+                self.nodelist_hat_w[m], self.nodelist_s[m], self.nodelist_w[m]
+            )
+        if "theta" in additional_nodes and self.nodelist_theta[m] is not None:
+            self.nodelist_theta[m].MB(self.nodelist_s[m])
+
+    def _elbo_w_sparsity_nodes(self, m: int) -> None:
+        additional_nodes = self.nodelist_w[m].w_prior.get_additional_nodes_to_update()
+        if "theta" in additional_nodes and self.nodelist_theta[m] is not None:
+            self.nodelist_theta[m].ELBO()
+        if "alpha" in additional_nodes and self.nodelist_alpha[m] is not None:
+            self.nodelist_alpha[m].ELBO()
+
+    def _sparsity_elbo_contribution(self, m: int) -> float:
+        additional_nodes = self.nodelist_w[m].w_prior.get_additional_nodes_to_update()
+        contribution = 0.0
+        if "theta" in additional_nodes and self.nodelist_theta[m] is not None:
+            contribution += self.nodelist_theta[m].elbo
+        if "alpha" in additional_nodes and self.nodelist_alpha[m] is not None:
+            contribution += self.nodelist_alpha[m].elbo
+        return contribution
 
     # ------------------------------------------------------------------
     # Extra y / tau nodes injected by FACTM for structured views
@@ -329,39 +359,13 @@ class FA:
         m = len(self.nodelist_y)  # next index in the extended list
 
         self.nodelist_y.append(y_node)
-
-        # Extend FAParams D and likelihoods to cover the injected view
         self.params.D.append(D_m)
-        self.params.likelihoods.append(Likelihood.CTM)
-        self.params.M += 1
 
-        # W node for the CTM view (FA uses it to update Z)
         prior_nodes = w_prior.create_nodes(m, self.params, starting_params, D_m, self.K)
-        self.nodelist_w_not_sparse.append(prior_nodes["w_m_node_not_sparse"])
-        self.nodelist_hat_w.append(prior_nodes["hat_w_m_node"])
-        self.nodelist_s.append(prior_nodes["s_m_node"])
-        self.nodelist_alpha.append(prior_nodes["alpha_m_node"])
-        self.nodelist_theta.append(prior_nodes["theta_m_node"])
-
-        node_w_m = nodeFA_w_m(
-            m, params=self.params, w_prior=w_prior, D=D_m, is_ctm=True
-        )
-        node_w_m.w_m_node_not_sparse = prior_nodes["w_m_node_not_sparse"]
-        node_w_m.hat_w_m_node = prior_nodes["hat_w_m_node"]
-        node_w_m.s_m_node = prior_nodes["s_m_node"]
-        node_w_m.alpha_m_node = prior_nodes["alpha_m_node"]
-        node_w_m.theta_m_node = prior_nodes["theta_m_node"]
-        self.nodelist_w.append(node_w_m)
-
+        self._register_w_prior_nodes(m, w_prior, prior_nodes, D_m, is_ctm=True)
         self.nodelist_tau.append(tau_node)
 
-        return m  # caller stores this index to update the injected node later
-
-    # ------------------------------------------------------------------
-    # MB / update / ELBO  (unchanged logic, just no Likelihood.CTM guards
-    # needed for simple-view-only loops; injected CTM nodes are handled
-    # via their index returned from inject_structured_view)
-    # ------------------------------------------------------------------
+        return m
 
     def MB(self):
         self.node_z.MB(self.nodelist_y, self.nodelist_w, self.nodelist_tau)
@@ -380,28 +384,16 @@ class FA:
                 self.nodelist_theta[m],
             )
 
-            additional_nodes = self.nodelist_w[
-                m
-            ].w_prior.get_additional_nodes_to_update()
-            if "alpha" in additional_nodes and self.nodelist_alpha[m] is not None:
-                self.nodelist_alpha[m].MB(
-                    self.nodelist_hat_w[m], self.nodelist_s[m], self.nodelist_w[m]
-                )
-            if "theta" in additional_nodes and self.nodelist_theta[m] is not None:
-                self.nodelist_theta[m].MB(self.nodelist_s[m])
-
+            self._mb_w_sparsity_nodes(m)
             self.nodelist_tau[m].MB(self.nodelist_y[m], self.nodelist_w[m], self.node_z)
 
     def update(self, indices: np.ndarray | None = None):
         self.node_z.update(indices=indices)
 
-        # update W
-        # and all the nodes defying sparsity
-        #  - it depends on tau params, but not tau_w_z
         for m in range(len(self.nodelist_w)):
             self.nodelist_w[m].update()
 
-        # Tau update only for simple views (not CTM-injected ones)
+        # Tau is updated only for simple views, not CTM proxy nodes.
         for m in range(self.M):
             self.nodelist_tau[m].update()
 
@@ -424,15 +416,8 @@ class FA:
 
         for m in range(len(self.nodelist_w)):
             self.nodelist_w[m].ELBO()
-            additional_nodes = self.nodelist_w[
-                m
-            ].w_prior.get_additional_nodes_to_update()
-            if "theta" in additional_nodes and self.nodelist_theta[m] is not None:
-                self.nodelist_theta[m].ELBO()
-            if "alpha" in additional_nodes and self.nodelist_alpha[m] is not None:
-                self.nodelist_alpha[m].ELBO()
+            self._elbo_w_sparsity_nodes(m)
 
-        # ELBO contributions for simple views only
         for m in range(self.M):
             self.nodelist_tau[m].ELBO()
             self.nodelist_y[m].ELBO()
@@ -440,13 +425,7 @@ class FA:
         elbo = self.node_z.elbo
         for m in range(len(self.nodelist_w)):
             elbo += self.nodelist_w[m].elbo
-            additional_nodes = self.nodelist_w[
-                m
-            ].w_prior.get_additional_nodes_to_update()
-            if "theta" in additional_nodes and self.nodelist_theta[m] is not None:
-                elbo += self.nodelist_theta[m].elbo
-            if "alpha" in additional_nodes and self.nodelist_alpha[m] is not None:
-                elbo += self.nodelist_alpha[m].elbo
+            elbo += self._sparsity_elbo_contribution(m)
 
         for m in range(self.M):
             elbo += self.nodelist_tau[m].elbo
@@ -454,7 +433,7 @@ class FA:
 
         self.elbo = elbo
 
-    def get_elbo(self):
+    def get_elbo(self) -> float:
         return self.elbo
 
     def variance_explained_per_factor(self):

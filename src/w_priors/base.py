@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from ..FA_model import FAParams, nodeFA_w_m
 
 
@@ -18,20 +20,24 @@ class WPriorBase(ABC):
         """
         Create all nodes needed for this prior.
 
-        Returns:
-            dict with keys: w_m_node_not_sparse, hat_w_m_node,
-            s_m_node, alpha_m_node, theta_m_node
-            (None for nodes not used by this prior)
+        Returns a dict with keys ``w_m_node_not_sparse``, ``hat_w_m_node``,
+        ``s_m_node``, ``alpha_m_node``, and ``theta_m_node`` (``None`` when unused).
         """
-        pass
+        ...
 
     @abstractmethod
     def update_w_k(
-        self, w_node: "nodeFA_w_m", k: int, z_node: Any, y_node: Any, tau_node: Any
-    ):
+        self,
+        w_node: "nodeFA_w_m",
+        k: int,
+        z_node: Any,
+        y_node: Any,
+        tau_node: Any,
+    ) -> None:
         """Update W node for factor k given this prior."""
-        pass
+        ...
 
+    @abstractmethod
     def svi_target_w_k(
         self,
         w_node: "nodeFA_w_m",
@@ -39,28 +45,27 @@ class WPriorBase(ABC):
         z_node: Any,
         y_node: Any,
         tau_node: Any,
-        indices,
+        indices: "np.ndarray | None",
     ) -> dict:
         """
-        Compute minibatch-based target variational parameters for factor k.
+        Compute minibatch targets for factor k used in stochastic VI.
 
-        This is used by stochastic mean-field VI to form λ_B^(t+1), which is
-        then mixed into the global parameters with step size ρ_t.
+        Returned keys depend on the prior (e.g. ``mu``/``var`` or
+        ``mu_hat``/``var_hat``/``lambda`` for spike-and-slab).
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
-    def update_params(self, w_node: "nodeFA_w_m"):
+    def update_params(self, w_node: "nodeFA_w_m") -> None:
         """Update E_w and E_w_squared based on this prior."""
-        pass
+        ...
 
     @abstractmethod
     def compute_elbo(self, w_node: "nodeFA_w_m") -> float:
         """Compute ELBO contribution for this prior."""
-        pass
+        ...
 
     @abstractmethod
-    def get_additional_nodes_to_update(self) -> list:
-        """Return list of additional node types
-        that need updating (e.g., ['alpha', 'theta'])."""
-        pass
+    def get_additional_nodes_to_update(self) -> list[str]:
+        """Return node types that need updating beyond W (e.g. ``alpha``, ``theta``)."""
+        ...

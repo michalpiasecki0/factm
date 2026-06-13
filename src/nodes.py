@@ -1,8 +1,5 @@
 """
-FA model node classes.
-
-This module contains node classes that are used by both FA_model and
-likelihood/prior modules, avoiding circular imports.
+FA model node classes shared by FA_model and likelihood/prior modules.
 """
 from typing import TYPE_CHECKING
 
@@ -14,16 +11,18 @@ if TYPE_CHECKING:
 
 from .utils import log_eps
 
-EPS = 1e-20
-
 
 class nodeFA_tau_m:
-    """
-    Class to define tau node (dim d, for one m)
-    """
+    """Precision (tau) node for one view: Gamma variational params, or CTM proxy."""
 
     def __init__(
-        self, a0, b0, m, params: "FAParams", D: int = None, is_ctm: bool = False
+        self,
+        a0,
+        b0,
+        m: int | None,
+        params: "FAParams",
+        D: int | None = None,
+        is_ctm: bool = False,
     ):
         self.params = params
         self.m = m
@@ -33,12 +32,9 @@ class nodeFA_tau_m:
         if not self.is_ctm:
             self.a0 = a0
             self.b0 = b0
-
             self.E_resid_squared_half = 0
-
             self.elbo = 0
-
-        if self.is_ctm:
+        else:
             self.Sigma0_inv = np.eye(self.D)
 
     def MB(self, y_m_node, w_m_node, z_node):
@@ -46,16 +42,9 @@ class nodeFA_tau_m:
         self.y_m_node = y_m_node
         self.z_node = z_node
 
-        # we need MB for this, so it is here and not in init
         if not self.is_ctm:
-            self.vi_a = (
-                self.a0
-                + (
-                    self.params.N
-                    - np.sum(np.ma.getmaskarray(self.y_m_node.data), axis=0)
-                )
-                / 2
-            )
+            masked_per_feature = np.sum(np.ma.getmaskarray(self.y_m_node.data), axis=0)
+            self.vi_a = self.a0 + (self.params.N - masked_per_feature) / 2
             self.vi_b = self.vi_a.copy()
             self.update_all_params()
             self.update_params()
@@ -64,9 +53,7 @@ class nodeFA_tau_m:
         self._update_vi_b_and_params()
 
     def svi_update(self, indices: np.ndarray, rho: float):
-        """
-        Stochastic update for tau using a minibatch of samples.
-        """
+        """Stochastic update for tau using a minibatch of samples."""
         if self.is_ctm:
             return
         self._update_vi_b_and_params(indices=indices, rho=rho)
@@ -74,18 +61,11 @@ class nodeFA_tau_m:
     def _update_vi_b_and_params(
         self, indices: np.ndarray | None = None, rho: float | None = None
     ):
-        """
-        Shared update logic for both full-batch and stochastic (minibatch) updates.
-
-        - If `rho` is None: do a full replacement update for `vi_b`.
-        - If `rho` is provided: do an exponential moving average update using `rho`.
-        """
         if indices is None:
             indices = np.arange(self.params.N)
 
         self.update_params_w_z()
-        resid_sum = np.ma.sum(self.E_resid_squared_half[indices], axis=0)
-        vi_b_target = self.b0 + resid_sum
+        vi_b_target = self.b0 + np.ma.sum(self.E_resid_squared_half[indices], axis=0)
 
         if rho is None:
             self.vi_b = vi_b_target
@@ -99,9 +79,7 @@ class nodeFA_tau_m:
         self.log_gamma_vi_a = gammaln(self.vi_a)
         self.digamma_vi_a = digamma(self.vi_a)
 
-        # self.update_params()
-
-        self.kl_const = -self.D * (self.log_gamma_a0) + self.D * (
+        self.kl_const = -self.D * self.log_gamma_a0 + self.D * (
             self.a0 * log_eps(self.b0)
         )
         self.entropy_cons = (
@@ -125,20 +103,13 @@ class nodeFA_tau_m:
         )
 
     def update_params_w_z(self):
-        # d x n, sum over n
-
-        # <(y_nd - \sum_k z_nk w_kd)**2>/2
-        third_term_of_tau = (
-            np.ma.array(
-                self.w_m_node.E_w_z_squared, mask=np.ma.getmaskarray(self.y_m_node.data)
-            )
-            / 2
-        )
-        first_term_of_tau = self.y_m_node.data**2 / 2
-        second_term_of_tau = -self.y_m_node.data * self.w_m_node.E_w_z
-
+        """E[(y - W z)^2 / 2] under the current variational expectations."""
+        data_mask = np.ma.getmaskarray(self.y_m_node.data)
+        third_term = np.ma.array(self.w_m_node.E_w_z_squared, mask=data_mask) / 2
         self.E_resid_squared_half = (
-            first_term_of_tau + second_term_of_tau + third_term_of_tau
+            self.y_m_node.data**2 / 2
+            - self.y_m_node.data * self.w_m_node.E_w_z
+            + third_term
         )
 
     def ELBO(self):
@@ -152,14 +123,19 @@ class nodeFA_tau_m:
 
 
 class nodeFA_y_m:
-    def __init__(self, data_n, m, params: "FAParams", D: int = None):
+    """Observed data node for one FA view."""
+
+    def __init__(
+        self,
+        data_n,
+        m: int | None,
+        params: "FAParams",
+        D: int | None = None,
+    ):
         self.params = params
         self.m = m
         self.D = D if D is not None else (params.D[m] if m is not None else 0)
-
         self.data = data_n
-        self.data_original = data_n
-
         self.elbo = 0
 
     def MB(self, w_m_node, tau_m_node):
@@ -167,11 +143,9 @@ class nodeFA_y_m:
         self.tau_m_node = tau_m_node
 
     def ELBO(self):
-        elbo = (
-            -(self.params.N * self.D - np.sum(np.ma.getmaskarray(self.data)))
-            * log_eps(2 * np.pi)
-            / 2
+        n_observed = self.params.N * self.D - np.sum(np.ma.getmaskarray(self.data))
+        self.elbo = (
+            -n_observed * log_eps(2 * np.pi) / 2
             + np.ma.sum(self.tau_m_node.E_log_tau) / 2
             - np.ma.sum(self.tau_m_node.E_tau * self.tau_m_node.E_resid_squared_half)
         )
-        self.elbo = elbo

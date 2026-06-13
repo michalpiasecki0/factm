@@ -14,6 +14,18 @@ from .utils import log_eps
 EPS = 1e-20
 
 
+def _diag_cov_sum_k_z_w(
+    E_z_squared: np.ndarray,
+    E_w_squared: np.ndarray,
+    E_z: np.ndarray,
+    E_w: np.ndarray,
+) -> np.ndarray:
+    """diag(Cov(sum_k z_nk w_.k)) under mean-field factorization."""
+    Ez2w2 = np.sum(np.dot(E_z_squared, E_w_squared.T), axis=0)
+    Ezw_2 = np.sum(np.dot(E_z**2, E_w.T**2), axis=0)
+    return Ez2w2 - Ezw_2
+
+
 @dataclass
 class CTMParams:
     """Shared parameters for Correlated Topic Model."""
@@ -22,7 +34,6 @@ class CTMParams:
     L: int
     G: int
     I_per_n: List[int]
-    J_per_n: List[int]
     maskNA_N: List[bool]
     maskNA_N_L: np.ndarray
 
@@ -66,14 +77,12 @@ class nodeCTM_Sigma0:
         )
 
         denom = int(idx.size)
-        Ez2w2 = np.sum(
-            np.dot(self.w_z_node.E_z_squared[idx], self.w_z_node.E_w_squared.T),
-            axis=0,
+        cov_sumk_znk_wk = _diag_cov_sum_k_z_w(
+            self.w_z_node.E_z_squared[idx],
+            self.w_z_node.E_w_squared,
+            self.w_z_node.E_z[idx],
+            self.w_z_node.E_w,
         )
-        Ezw_2 = np.sum(
-            np.dot(self.w_z_node.E_z[idx] ** 2, self.w_z_node.E_w.T**2), axis=0
-        )
-        cov_sumk_znk_wk = Ez2w2 - Ezw_2
 
         vi_var = np.asarray(self.eta_node.vi_var, dtype=float)
         vi_var_mean = np.mean(vi_var[idx], axis=0)
@@ -87,14 +96,12 @@ class nodeCTM_Sigma0:
     def update(self):
         centered_mean = self.eta_node.vi_mu - self.mu0_node.mu0 - self.w_z_node.E_w_z
 
-        # Below we compute: diag(Cov(\sum_k z_nk w_.k, \sum_k' z_nk' w_.k'))
-        # for l!= l' Cov(w_lk, w_l'k), so just diag needed
-        Ez2w2 = np.sum(
-            np.dot(self.w_z_node.E_z_squared, self.w_z_node.E_w_squared.T),
-            axis=0,
+        cov_sumk_znk_wk = _diag_cov_sum_k_z_w(
+            self.w_z_node.E_z_squared,
+            self.w_z_node.E_w_squared,
+            self.w_z_node.E_z,
+            self.w_z_node.E_w,
         )
-        Ezw_2 = np.sum(np.dot(self.w_z_node.E_z**2, self.w_z_node.E_w.T**2), axis=0)
-        cov_sumk_znk_wk = Ez2w2 - Ezw_2
 
         n = self.params.N - np.sum(self.params.maskNA_N)
 
@@ -171,13 +178,13 @@ class nodeCTM_w_z:
         self.E_w_z_squared = np.dot(self.E_z**2, (self.E_w.T) ** 2)
 
     def MB(self):
-        pass
+        """Expectations are synced from FA in FACTM; no local message passing."""
 
     def update(self):
-        pass
+        """Updated externally via FACTM sync, not inside CTM.update."""
 
     def ELBO(self):
-        pass
+        """No separate ELBO term; W/Z are handled in the FA part of FACTM."""
 
 
 class nodeCTM_eta:
@@ -261,13 +268,7 @@ class nodeCTM_eta:
                     (1.0 * self.vi_mu[n, :], 1.0 * self.vi_var[n, :])
                 )
 
-                # a condition that variances are non-negative
-                bnds = tuple(
-                    map(
-                        lambda x: (-1e1, 1e1) if x < self.params.L else (EPS, 1e1),
-                        range(2 * self.params.L),
-                    )
-                )
+                bnds = [(-10.0, 10.0)] * self.params.L + [(EPS, 10.0)] * self.params.L
 
                 result = minimize(
                     f,
@@ -296,14 +297,12 @@ class nodeCTM_eta:
 
         centered_mean = self.vi_mu - self.w_z_node.E_w_z - self.mu0_node.mu0
 
-        # Below we compute: diag(Cov(\sum_k z_nk w_.k, \sum_k' z_nk' w_.k'))
-        # for l!= l' Cov(w_lk, w_l'k), so just diag needed
-        Ez2w2 = np.sum(
-            np.dot(self.w_z_node.E_z_squared, self.w_z_node.E_w_squared.T),
-            axis=0,
+        cov_sum_znk_wk = _diag_cov_sum_k_z_w(
+            self.w_z_node.E_z_squared,
+            self.w_z_node.E_w_squared,
+            self.w_z_node.E_z,
+            self.w_z_node.E_w,
         )
-        Ezw_2 = np.sum(np.dot(self.w_z_node.E_z**2, self.w_z_node.E_w.T**2), axis=0)
-        cov_sum_znk_wk = Ez2w2 - Ezw_2
 
         elbo += (
             -self.params.N * np.log(self.Sigma0_node.det_Sigma0) / 2
@@ -328,8 +327,6 @@ class nodeCTM_eta:
     ):
         term_xi = np.sum(vi_xi_par_n, axis=0)
 
-        if np.any((-np.log(vi_zeta_n) + vi_eta_mu_n + vi_eta_var_n / 2) > 1e2):
-            print("over")
         return (
             -np.sum(vi_eta_var_n * np.diag(Sigma_inv)) / 2
             - np.sum(
@@ -439,7 +436,7 @@ class nodeCTM_beta:
     def __init__(self, alpha, vi_alpha, params: CTMParams):
         self.params = params
 
-        # N x L x G
+        # Scalar Dirichlet hyperparameter alpha; variational vi_alpha is (L, G).
         self.alpha = alpha
         self.vi_alpha = vi_alpha
 
@@ -535,33 +532,23 @@ class nodeCTM_y:
         self.elbo = elbo
 
 
-def starting_params_Sigma(starting_params, L):
-    if "Sigma" in starting_params.keys():
-        Sigma = 1 * starting_params["Sigma"]
-    else:
-        Sigma = np.eye(L)
-
-    return Sigma
+def starting_params_Sigma(starting_params: dict, L: int) -> np.ndarray:
+    if "Sigma" in starting_params:
+        return np.array(starting_params["Sigma"], copy=True)
+    return np.eye(L)
 
 
-def starting_params_mu(starting_params, L):
-    if "mu" in starting_params.keys():
-        mu = 1 * starting_params["mu"]
-    else:
-        mu = np.zeros(L)
-
-    return mu
+def starting_params_mu(starting_params: dict, L: int) -> np.ndarray:
+    if "mu" in starting_params:
+        return np.array(starting_params["mu"], copy=True)
+    return np.zeros(L)
 
 
-def starting_params_beta(starting_params, L, G):
-    if "topics" in starting_params.keys():
-        topics = 1 * starting_params["topics"]
-
-    else:
-        # par=100*1 so the distribution is close to uniform but not uniform
-        topics = np.random.dirichlet(100 * np.ones(G), size=L)
-
-    return topics
+def starting_params_beta(starting_params: dict, L: int, G: int) -> np.ndarray:
+    if "topics" in starting_params:
+        return np.array(starting_params["topics"], copy=True)
+    # Dirichlet(100): nearly uniform but not exactly uniform.
+    return np.random.dirichlet(100 * np.ones(G), size=L)
 
 
 class CTM:
@@ -570,7 +557,14 @@ class CTM:
     """
 
     def __init__(
-        self, data, N, L, G, K, starting_params=None, FA=True, *args, **kwargs
+        self,
+        data,
+        N: int,
+        L: int,
+        G: int,
+        K: int,
+        starting_params: dict | None = None,
+        FA: bool = True,
     ):
         self.N = N
         self.L = L
@@ -582,29 +576,22 @@ class CTM:
         if starting_params is None:
             starting_params = {}
 
-        # compute I and J from data:
         I_per_n = []
-        J_per_n = []
         maskNA = []
         init_xi_par = []
 
         for n in range(N):
             data_n = data[n]
-
             I_n = data_n.shape[0]
-            J_n = np.sum(data_n, axis=1)
             maskNA_n = I_n == 0
 
             I_per_n.append(I_n)
-            J_per_n.append(J_n)
             maskNA.append(maskNA_n)
-
             init_xi_par.append(np.ones((I_n, L)) / L)
 
         self.I_per_n = I_per_n
-        self.J_per_n = J_per_n
         self.maskNA_N = maskNA
-        self.maskNA_N_L = np.outer(self.maskNA_N, self.L * [True])
+        self.maskNA_N_L = np.outer(self.maskNA_N, np.ones(L, dtype=bool))
 
         # Create shared parameters object
         self.params = CTMParams(
@@ -612,12 +599,10 @@ class CTM:
             L=self.L,
             G=self.G,
             I_per_n=self.I_per_n,
-            J_per_n=self.J_per_n,
             maskNA_N=self.maskNA_N,
             maskNA_N_L=self.maskNA_N_L,
         )
 
-        # CREATING NODES:
         Sigma0 = starting_params_Sigma(starting_params, self.L)
         self.node_Sigma0 = nodeCTM_Sigma0(Sigma0, params=self.params)
 
@@ -706,5 +691,5 @@ class CTM:
 
         self.elbo = elbo
 
-    def get_elbo(self):
+    def get_elbo(self) -> float:
         return self.elbo
