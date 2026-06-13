@@ -9,3 +9,5 @@ fitted_factm
 *.joblib
 *copy*.ipynb
 *bad.ipynb
+cohort_tests_notebooks/.fit_cache/
+cohort_tests_notebooks/.fit_cache_immucan/
