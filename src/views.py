@@ -1,17 +1,12 @@
 """
-Typed wrappers that distinguish structured from unstructured data views.
+Data view types for FACTM.
 
-SimpleView      - a single 2-D matrix  (samples x features), used for
-                  Normal / Bernoulli FA likelihoods.
-StructuredView  - a list of 2-D matrices (one per sample), used for
-                  CTM likelihoods.
-Views           - container that holds simple and structured views
-                  separately, replacing the old {"M0": ..., "M1": ...} dict.
+Simple views hold one matrix per modality (FA). Structured views hold one
+matrix per sample (CTM). :class:`Views` groups both kinds separately.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Union
 
 import numpy as np
 
@@ -30,12 +25,10 @@ class SimpleView:
 
     @property
     def N(self) -> int:
-        """Number of samples."""
         return self.data.shape[0]
 
     @property
     def D(self) -> int:
-        """Number of features."""
         return self.data.shape[1]
 
 
@@ -43,17 +36,21 @@ class SimpleView:
 class StructuredView:
     """Structured data view (list of 2-D matrices, one per sample)."""
 
-    data: List[np.ndarray]
+    data: list[np.ndarray]
 
     def __post_init__(self) -> None:
         if not self.data:
             raise ValueError("StructuredView expects a non-empty list")
         for i, arr in enumerate(self.data):
+            if not isinstance(arr, np.ndarray):
+                raise TypeError(
+                    f"StructuredView expects numpy arrays, got {type(arr)} at index {i}"
+                )
             if arr.ndim != 2:
                 raise ValueError(
-                    f"StructuredView expects 2D arrays, "
-                    f"got shape {arr.shape} at index {i}"
+                    f"StructuredView expects 2D arrays, got {arr.shape} at index {i}"
                 )
+
         g = self.data[0].shape[1]
         for i, arr in enumerate(self.data[1:], start=1):
             if arr.shape[1] != g:
@@ -64,34 +61,19 @@ class StructuredView:
 
     @property
     def N(self) -> int:
-        """Number of samples."""
         return len(self.data)
 
     @property
     def G(self) -> int:
-        """Number of features (vocabulary / cell types)."""
         return self.data[0].shape[1]
-
-
-View = Union[SimpleView, StructuredView]
 
 
 @dataclass
 class Views:
-    """
-    Container that holds simple and structured views separately.
+    """Container for simple and structured views with a shared sample count."""
 
-    Replaces the old ``{"M0": array, "M1": list_of_arrays, ...}`` dict,
-    eliminating all string-based M-indexing from the codebase.
-
-    Attributes
-    ----------
-    simple:     list of SimpleView (Normal / Bernoulli FA likelihoods)
-    structured: list of StructuredView (CTM likelihoods)
-    """
-
-    simple: List[SimpleView] = field(default_factory=list)
-    structured: List[StructuredView] = field(default_factory=list)
+    simple: list[SimpleView] = field(default_factory=list)
+    structured: list[StructuredView] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.simple and not self.structured:
@@ -105,7 +87,6 @@ class Views:
 
     @property
     def N(self) -> int:
-        """Number of samples (consistent across all views)."""
         if self.simple:
             return self.simple[0].N
         return self.structured[0].N
@@ -119,21 +100,16 @@ class Views:
         return len(self.structured)
 
     @classmethod
-    def from_list(cls, data: list) -> "Views":
+    def from_list(cls, data: list) -> Views:
         """
         Build a :class:`Views` from a list of arrays or lists-of-arrays.
 
-        Each element is classified independently:
-
-        * ``np.ndarray``       → :class:`SimpleView`
-        * ``list[np.ndarray]`` → :class:`StructuredView`
-
-        Examples
-        --------
-        >>> Views.from_list([rna_matrix, atac_matrix, cell_counts_per_sample])
+        * ``np.ndarray`` -> :class:`SimpleView`
+        * ``list[np.ndarray]`` -> :class:`StructuredView`
         """
-        simple = []
-        structured = []
+        simple: list[SimpleView] = []
+        structured: list[StructuredView] = []
+
         for i, el in enumerate(data):
             if isinstance(el, np.ndarray):
                 simple.append(SimpleView(el))
@@ -142,6 +118,7 @@ class Views:
             else:
                 raise TypeError(
                     f"Element at index {i} has unsupported type {type(el)}. "
-                    "Expected np.ndarray Simple or list[np.ndarray] Structured."
+                    "Expected np.ndarray (simple) or list[np.ndarray] (structured)."
                 )
+
         return cls(simple=simple, structured=structured)

@@ -3,7 +3,6 @@ High-level entry point: FACTModel.
 
 Accepts a :class:`~views.Views` container and a :class:`~model_config.ModelConfig`
 instead of the old ``{"M0": ..., "M1": ...}`` dict + flat config lists.
-All M-string indexing has been removed.
 """
 
 import numpy as np
@@ -15,7 +14,7 @@ from tqdm import tqdm
 from .CTM_model import CTM
 from .enums import FA_Pretrain, WPrior
 from .FACTM_model import FACTM
-from .model_config import ModelConfig
+from .model_config import ModelConfig, SVIConfig
 from .views import Views
 
 
@@ -42,11 +41,6 @@ class FACTModel(FACTM):
             self.seed = seed
             np.random.seed(seed)
 
-        self.K = K
-        self.views = views
-        self.model_config = model_config
-
-        # Validate consistency between views and config
         if views.num_simple != model_config.num_simple:
             raise ValueError(
                 f"Number of simple views in data ({views.num_simple}) must match "
@@ -69,7 +63,38 @@ class FACTModel(FACTM):
         )
 
         self.__first_fit = True
-        self.elbo_sequence = []
+        self.elbo_sequence: list[float] = []
+
+    def _view_config(self, m: int):
+        if m < self.views.num_simple:
+            return self.model_config.simple_view_configs[m]
+        return self.model_config.structured_view_configs[m - self.views.num_simple]
+
+    @staticmethod
+    def _should_stop_elbo(elbo_sequence: list[float], elbo_tres: float) -> bool:
+        return (
+            bool(elbo_tres)
+            and len(elbo_sequence) >= 2
+            and (elbo_sequence[-1] - elbo_sequence[-2]) < elbo_tres
+        )
+
+    def _svi_minibatch_size(self, svi: SVIConfig) -> int:
+        if svi.batch_size is not None:
+            return min(int(svi.batch_size), self.N)
+        frac = (
+            svi.batch_fraction
+            if svi.batch_fraction is not None
+            else self.model_config.node_update_factor
+        )
+        return max(1, int(round(frac * self.N)))
+
+    @staticmethod
+    def _svi_learning_rate(svi: SVIConfig, step: int) -> float:
+        rho = float(svi.rho_tau) / (
+            (1.0 + float(svi.rho_kappa) * float(step)) ** float(svi.rho_power)
+        )
+        rho_min, rho_max = svi.rho_clip
+        return float(np.clip(rho, rho_min, rho_max))
 
     # ------------------------------------------------------------------
     # Pre-training
@@ -83,7 +108,6 @@ class FACTModel(FACTM):
         if FA_pretrain not in (FA_Pretrain.PCA, FA_Pretrain.FA):
             raise TypeError("FA_pretrain must be one of the FA_Pretrain enum values.")
 
-        # 1. Pre-train each CTM independently
         for i, (sv, ctm) in enumerate(
             zip(self.views.structured, self.ctms, strict=True)
         ):
@@ -104,16 +128,13 @@ class FACTModel(FACTM):
             tmp_ctm.FA = True
             self.ctms[i] = tmp_ctm
 
-            # Push updated eta signal into FA's proxy y node
             fa_idx = self._fa_indices[i]
             self.fa.nodelist_y[fa_idx].data = (
                 tmp_ctm.node_eta.vi_mu - tmp_ctm.node_mu0.mu0
             )
 
-        # 2. Pre-train FA weights with PCA / sklearn FactorAnalysis
         print("Pretraining FA")
 
-        # Collect and standardise all view data (simple + CTM proxy)
         data_parts = []
         for m in range(len(self.fa.nodelist_y)):
             d = self.fa.nodelist_y[m].data
@@ -131,10 +152,9 @@ class FACTModel(FACTM):
             reducer = FactorAnalysis(n_components=self.fa.K)
 
         reducer.fit(data_combined)
-        loadings_all = reducer.components_.T  # (total_D, K)
+        loadings_all = reducer.components_.T
         latent_factors = reducer.transform(data_combined)
 
-        # Distribute loadings back to per-view W nodes
         D_cumsum = [0] + list(
             np.cumsum(
                 [
@@ -147,21 +167,13 @@ class FACTModel(FACTM):
         for m in range(len(self.fa.nodelist_w)):
             loadings_m = loadings_all[D_cumsum[m] : D_cumsum[m + 1], :]
             std_m = np.std(self.fa.nodelist_y[m].data, axis=0)
-
-            cfg = (
-                self.model_config.simple_view_configs[m]
-                if m < self.views.num_simple
-                else self.model_config.structured_view_configs[
-                    m - self.views.num_simple
-                ]
-            )
+            cfg = self._view_config(m)
 
             if cfg.w_prior in (WPrior.ARD, WPrior.ARD_SS):
                 self.fa.nodelist_hat_w[m].vi_mu = (std_m * loadings_m.T).T
             elif cfg.w_prior == WPrior.NONE:
                 self.fa.nodelist_w_not_sparse[m].vi_mu = (std_m * loadings_m.T).T
 
-        # Initialise Z
         min_max_scaler = MinMaxScaler((-1, 1))
         self.fa.node_z.vi_mu = min_max_scaler.fit_transform(latent_factors)
 
@@ -181,7 +193,6 @@ class FACTModel(FACTM):
             if pretrain:
                 self.pretrain()
 
-            # One initial deterministic update to populate expectations
             self.update()
             self.ELBO()
             self.elbo_sequence.append(self.get_elbo())
@@ -189,51 +200,9 @@ class FACTModel(FACTM):
         self.__first_fit = False
         print("Fitting model")
 
-        svi = getattr(self.model_config, "svi", None)
-        if svi is not None and svi.enabled:
-            t = 0
-            for it in tqdm(range(max_iter)):
-                if svi.batch_size is not None:
-                    S = min(int(svi.batch_size), self.N)
-                else:
-                    frac = (
-                        svi.batch_fraction
-                        if svi.batch_fraction is not None
-                        else self.model_config.node_update_factor
-                    )
-                    S = max(1, int(round(frac * self.N)))
-
-                indices = np.random.choice(self.N, size=S, replace=False)
-
-                if it < svi.warmup_iters or not svi.stochastic_fa_globals:
-                    # Warmup: keep global updates deterministic/full-data.
-                    self.update(update_factor=float(S) / float(self.N))
-                else:
-                    # Experimental: repeat indices to length N instead of using
-                    # N/S scaling inside the minibatch sufficient statistics.
-                    if svi.repeat_minibatch and S < self.N:
-                        reps = int(np.ceil(float(self.N) / float(S)))
-                        indices = np.tile(indices, reps)[: self.N]
-
-                    rho = float(svi.rho_tau) / (
-                        (1.0 + float(svi.rho_kappa) * float(t)) ** float(svi.rho_power)
-                    )
-                    rho_min, rho_max = svi.rho_clip
-                    rho = float(np.clip(rho, rho_min, rho_max))
-                    self.update_svi(indices=indices, rho=rho)
-                    t += 1
-
-                if (it % svi.elbo_every) == 0:
-                    self.ELBO()
-                    self.elbo_sequence.append(self.get_elbo())
-
-                    if (
-                        elbo_tres
-                        and len(self.elbo_sequence) >= 2
-                        and (self.elbo_sequence[-1] - self.elbo_sequence[-2])
-                        < elbo_tres
-                    ):
-                        break
+        svi = self.model_config.svi
+        if svi.enabled:
+            self._fit_svi(max_iter=max_iter, elbo_tres=elbo_tres, svi=svi)
             return
 
         for _ in tqdm(range(max_iter)):
@@ -241,8 +210,37 @@ class FACTModel(FACTM):
             self.ELBO()
             self.elbo_sequence.append(self.get_elbo())
 
-            if self.elbo_sequence[-1] - self.elbo_sequence[-2] < elbo_tres:
+            if self._should_stop_elbo(self.elbo_sequence, elbo_tres):
                 break
+
+    def _fit_svi(
+        self,
+        max_iter: int,
+        elbo_tres: float,
+        svi: SVIConfig,
+    ) -> None:
+        svi_step = 0
+        for it in tqdm(range(max_iter)):
+            S = self._svi_minibatch_size(svi)
+            indices = np.random.choice(self.N, size=S, replace=False)
+
+            if it < svi.warmup_iters or not svi.stochastic_fa_globals:
+                self.update(update_factor=float(S) / float(self.N))
+            else:
+                if svi.repeat_minibatch and S < self.N:
+                    reps = int(np.ceil(float(self.N) / float(S)))
+                    indices = np.tile(indices, reps)[: self.N]
+
+                rho = self._svi_learning_rate(svi, svi_step)
+                self.update_svi(indices=indices, rho=rho)
+                svi_step += 1
+
+            if (it % svi.elbo_every) == 0:
+                self.ELBO()
+                self.elbo_sequence.append(self.get_elbo())
+
+                if self._should_stop_elbo(self.elbo_sequence, elbo_tres):
+                    break
 
     # ------------------------------------------------------------------
     # Point estimators
@@ -282,7 +280,7 @@ class FACTModel(FACTM):
     def get_probabilities_of_topics(self, structured_idx: int) -> np.ndarray:
         return self.ctms[structured_idx].node_xi.vi_par
 
-    def get_clusters(self, structured_idx: int) -> list:
+    def get_clusters(self, structured_idx: int) -> list[np.ndarray]:
         return [
             np.argmax(self.ctms[structured_idx].node_xi.vi_par[n], axis=1)
             for n in range(self.N)
