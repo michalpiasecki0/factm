@@ -1,7 +1,6 @@
 """
 Automatic Relevance Determination with Spike and Slab (ARD_SS) prior for weights.
 """
-# Import ARD classes (ARD_SS uses ARD components)
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -17,6 +16,26 @@ from ..starting_params import starting_params_hat_w_m, starting_params_s_m
 from ..utils import log_eps, xlogx
 
 EPS = 1e-20
+
+
+def _compute_spike_slab_lambda(
+    nominator: np.ndarray,
+    denominator: np.ndarray,
+    E_alpha: float,
+    E_log_LR_theta: float,
+    D: int,
+) -> np.ndarray:
+    lambda_k = (
+        E_log_LR_theta
+        + log_eps(E_alpha) / 2
+        + log_eps(denominator) / 2
+        + (nominator**2) / (2 * denominator)
+    )
+    lambda_k[lambda_k > -np.log(EPS)] = -np.log(EPS)
+    if D > 1:
+        lambda_min = np.log(D - 1)
+        lambda_k[lambda_k < lambda_min] = lambda_min
+    return lambda_k
 
 
 class nodeFA_s_m:
@@ -35,20 +54,9 @@ class nodeFA_s_m:
         pass
 
     def update_k(self, k, nominator, denominator, E_alpha, E_log_LR_theta):
-        lambda_k = (
-            E_log_LR_theta
-            + log_eps(E_alpha) / 2
-            + log_eps(denominator) / 2
-            + (nominator**2) / (2 * denominator)
+        lambda_k = _compute_spike_slab_lambda(
+            nominator, denominator, E_alpha, E_log_LR_theta, self.D
         )
-
-        # max value for lambda -> if it is reached, then P(S=1) = 1
-        # if np.any(lambda_k > -np.log(EPS)):
-        lambda_k[lambda_k > -np.log(EPS)] = -np.log(EPS)
-        # min value for lambda -> if it is reached, then P(S=1) = 1/D_m
-        # if np.any(lambda_k < np.log(self.D[self.m]-1)):
-        lambda_k[lambda_k < np.log(self.D - 1)] = np.log(self.D - 1)
-
         self.vi_lambda[:, k] = lambda_k
         self.vi_gamma[:, k] = 1 / (1 + np.exp(-lambda_k))
 
@@ -115,6 +123,7 @@ class ARD_SSWPrior(WPriorBase):
 
         s_lambda = starting_params_s_m(starting_params, m, D, K)
         node_s = nodeFA_s_m(s_lambda, D, params=params)
+        # Beta(99, 1) per factor: prior strongly favors active slab (theta near 1).
         node_theta_m = nodeFA_theta_m(
             1, 1, 99 * np.ones(K), np.ones(K), D, params=params
         )
@@ -132,7 +141,7 @@ class ARD_SSWPrior(WPriorBase):
     ):
         """Update W node for factor k for ARD_SS prior."""
         if not w_node.is_ctm:
-            # For FA likelihoods (Normal/Bernoulli)
+            # For FA likelihoods
             nominator_second_term_tmp = np.dot(
                 w_node.E_w, z_node.E_z.T * z_node.E_z[:, k]
             ).T
@@ -152,7 +161,6 @@ class ARD_SSWPrior(WPriorBase):
 
             w_node.hat_w_m_node.update_k(k, nominator, denominator)
 
-            # Update s node for ARD_SS
             E_log_LR_theta = w_node.theta_m_node.E_log_LR[k].copy()
             w_node.s_m_node.update_k(
                 k,
@@ -167,8 +175,6 @@ class ARD_SSWPrior(WPriorBase):
             w_node.alpha_m_node.update_k(k)
             w_node.theta_m_node.update_k(k)
         else:
-            # For CTM likelihood - ARD_SS not typically used with CTM
-            # But implement for completeness
             raise NotImplementedError("ARD_SS with CTM not yet implemented")
 
     def update_params(self, w_node: "nodeFA_w_m"):
@@ -251,23 +257,16 @@ class ARD_SSWPrior(WPriorBase):
             np.ma.dot(z2_k, tau_node.E_tau[indices]) + w_node.alpha_m_node.E_alpha[k]
         )
 
-        mu_hat = nominator / denominator
-        var_hat = 1.0 / denominator
-
         E_log_LR_theta = w_node.theta_m_node.E_log_LR[k].copy()
-        lambda_k = (
-            E_log_LR_theta
-            + log_eps(w_node.alpha_m_node.E_alpha[k]) / 2
-            + log_eps(denominator) / 2
-            + (nominator**2) / (2 * denominator)
-        )
-        lambda_k[lambda_k > -np.log(EPS)] = -np.log(EPS)
-        lambda_k[lambda_k < np.log(w_node.D - 1)] = np.log(w_node.D - 1)
-        gamma_k = 1.0 / (1.0 + np.exp(-lambda_k))
 
         return {
-            "mu_hat": mu_hat,
-            "var_hat": var_hat,
-            "lambda": lambda_k,
-            "gamma": gamma_k,
+            "mu_hat": nominator / denominator,
+            "var_hat": 1.0 / denominator,
+            "lambda": _compute_spike_slab_lambda(
+                nominator,
+                denominator,
+                w_node.alpha_m_node.E_alpha[k],
+                E_log_LR_theta,
+                w_node.D,
+            ),
         }

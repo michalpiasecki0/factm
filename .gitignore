@@ -1,5 +1,6 @@
 *__pycache__*
 fitted_mofa
+fitted_factm
 data
 
 # Auto detect text files and perform LF normalization
