@@ -36,6 +36,7 @@ from scipy.spatial import cKDTree  # noqa: E402
 from src.cohort_data import build_views_from_long_df  # noqa: E402
 from src.views import SimpleView, StructuredView, Views  # noqa: E402
 
+# Immucan data have been placed by us in external drive (T7)
 DEFAULT_IMMUCAN_ROOT = Path("/Volumes/T7/immucan/results/IF/05_IF_table_extraction")
 
 COHORT_SHORT_NAMES: dict[str, str] = {
