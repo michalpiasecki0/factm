@@ -13,6 +13,7 @@ from immucan_data.loader import (
     load_immucan,
     make_cohort_labels,
     spatial_windows_from_cells,
+    spatial_windows_with_centers,
 )
 from src.cohort_data import build_views_from_long_df, long_df_summary
 
@@ -137,6 +138,23 @@ def test_load_cells_for_structure_tumor_roi(mini_extraction: Path) -> None:
     cells = load_cells_for_structure(path)
     assert "in.ROI.tumor_tissue" not in cells.columns
     assert len(cells) == 2
+
+
+def test_spatial_windows_with_centers() -> None:
+    cells = pd.DataFrame(
+        {
+            "celltype": ["Tumor", "T", "Tumor"],
+            "nucleus.x": [0.0, 1.0, 0.1],
+            "nucleus.y": [0.0, 0.0, 0.1],
+        }
+    )
+    vocab = {"T": 0, "Tumor": 1}
+    windows, centers = spatial_windows_with_centers(
+        cells, celltype_to_idx=vocab, window_size=50, max_windows_per_sample=None
+    )
+    assert windows.shape == (3, 2)
+    assert len(centers) == 3
+    assert set(centers.tolist()) == {0, 1, 2}
 
 
 def test_spatial_windows_from_cells() -> None:

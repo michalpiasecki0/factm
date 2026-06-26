@@ -343,6 +343,61 @@ def _validate_window_size(window_size: int) -> int:
     return window_size
 
 
+def _window_center_indices(
+    n: int,
+    *,
+    max_windows_per_sample: int | None,
+    seed: int,
+) -> np.ndarray:
+    center_idx = np.arange(n, dtype=int)
+    if max_windows_per_sample is not None and n > max_windows_per_sample:
+        rng = np.random.default_rng(seed)
+        center_idx = rng.choice(n, size=max_windows_per_sample, replace=False)
+    return center_idx
+
+
+def spatial_windows_with_centers(
+    cells: pd.DataFrame,
+    *,
+    celltype_to_idx: dict[str, int],
+    window_size: int = DEFAULT_SPATIAL_WINDOW_SIZE,
+    max_windows_per_sample: int | None = 500,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Build a (n_windows, G) count matrix and center cell indices per window.
+
+    Centers match the kNN windowing used for CTM structured views; reuse the
+    same ``seed``, ``window_size``, and ``max_windows_per_sample`` as
+    :func:`load_immucan` when mapping topic probabilities back to tissue.
+    """
+    window_size = _validate_window_size(window_size)
+    g = len(celltype_to_idx)
+    n = len(cells)
+    if n == 0:
+        return np.zeros((0, g), dtype=float), np.zeros(0, dtype=int)
+
+    k = min(window_size, n)
+    coords = cells[["nucleus.x", "nucleus.y"]].to_numpy(dtype=float)
+    tree = cKDTree(coords)
+    center_idx = _window_center_indices(
+        n, max_windows_per_sample=max_windows_per_sample, seed=seed
+    )
+
+    unknown = set(cells["celltype"].unique()) - set(celltype_to_idx)
+    if unknown:
+        raise ValueError(f"Unknown cell types (not in vocabulary): {sorted(unknown)}")
+
+    ct_idx = cells["celltype"].map(celltype_to_idx).to_numpy(dtype=int)
+    rows: list[np.ndarray] = []
+    for i in center_idx:
+        _, nn_idx = tree.query(coords[i], k=k)
+        nn_idx = np.atleast_1d(nn_idx)
+        counts = np.bincount(ct_idx[nn_idx], minlength=g).astype(float)
+        rows.append(counts)
+    return np.vstack(rows), center_idx
+
+
 def spatial_windows_from_cells(
     cells: pd.DataFrame,
     *,
@@ -358,33 +413,14 @@ def spatial_windows_from_cells(
     (including the center). Centers are subsampled when ``max_windows_per_sample``
     is set and there are more cells than that cap.
     """
-    window_size = _validate_window_size(window_size)
-    g = len(celltype_to_idx)
-    n = len(cells)
-    if n == 0:
-        return np.zeros((0, g), dtype=float)
-
-    k = min(window_size, n)
-    coords = cells[["nucleus.x", "nucleus.y"]].to_numpy(dtype=float)
-    tree = cKDTree(coords)
-
-    center_idx = np.arange(n, dtype=int)
-    if max_windows_per_sample is not None and n > max_windows_per_sample:
-        rng = np.random.default_rng(seed)
-        center_idx = rng.choice(n, size=max_windows_per_sample, replace=False)
-
-    unknown = set(cells["celltype"].unique()) - set(celltype_to_idx)
-    if unknown:
-        raise ValueError(f"Unknown cell types (not in vocabulary): {sorted(unknown)}")
-
-    ct_idx = cells["celltype"].map(celltype_to_idx).to_numpy(dtype=int)
-    rows: list[np.ndarray] = []
-    for i in center_idx:
-        _, nn_idx = tree.query(coords[i], k=k)
-        nn_idx = np.atleast_1d(nn_idx)
-        counts = np.bincount(ct_idx[nn_idx], minlength=g).astype(float)
-        rows.append(counts)
-    return np.vstack(rows)
+    windows, _ = spatial_windows_with_centers(
+        cells,
+        celltype_to_idx=celltype_to_idx,
+        window_size=window_size,
+        max_windows_per_sample=max_windows_per_sample,
+        seed=seed,
+    )
+    return windows
 
 
 def collect_celltype_vocabulary(
@@ -1065,4 +1101,5 @@ __all__ = [
     "load_or_build_long_df",
     "load_or_build_structured_views",
     "spatial_windows_from_cells",
+    "spatial_windows_with_centers",
 ]
