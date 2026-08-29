@@ -14,6 +14,18 @@ from .utils import log_eps
 EPS = 1e-20
 
 
+def _diag_cov_sum_k_z_w(
+    E_z_squared: np.ndarray,
+    E_w_squared: np.ndarray,
+    E_z: np.ndarray,
+    E_w: np.ndarray,
+) -> np.ndarray:
+    """diag(Cov(sum_k z_nk w_.k)) under mean-field factorization."""
+    Ez2w2 = np.sum(np.dot(E_z_squared, E_w_squared.T), axis=0)
+    Ezw_2 = np.sum(np.dot(E_z**2, E_w.T**2), axis=0)
+    return Ez2w2 - Ezw_2
+
+
 @dataclass
 class CTMParams:
     """Shared parameters for Correlated Topic Model."""
@@ -22,7 +34,6 @@ class CTMParams:
     L: int
     G: int
     I_per_n: List[int]
-    J_per_n: List[int]
     maskNA_N: List[bool]
     maskNA_N_L: np.ndarray
 
@@ -45,26 +56,73 @@ class nodeCTM_Sigma0:
         self.w_z_node = w_z_node
         self.mu0_node = mu0_node
 
+    def _sigma_batch_from_centered_mean(
+        self,
+        centered_mean: np.ndarray,
+        cov_sumk_znk_wk: np.ndarray,
+        vi_var_mean: np.ndarray,
+        denom: int,
+    ) -> np.ndarray:
+        return (
+            np.dot(centered_mean.T, centered_mean) / denom
+            + np.diag(vi_var_mean)
+            + np.diag(cov_sumk_znk_wk / denom)
+        )
+
+    def _sigma_batch_from_indices(self, idx: np.ndarray) -> np.ndarray:
+        centered_mean = (
+            np.asarray(self.eta_node.vi_mu, dtype=float)[idx]
+            - self.mu0_node.mu0
+            - np.asarray(self.w_z_node.E_w_z, dtype=float)[idx]
+        )
+
+        denom = int(idx.size)
+        cov_sumk_znk_wk = _diag_cov_sum_k_z_w(
+            self.w_z_node.E_z_squared[idx],
+            self.w_z_node.E_w_squared,
+            self.w_z_node.E_z[idx],
+            self.w_z_node.E_w,
+        )
+
+        vi_var = np.asarray(self.eta_node.vi_var, dtype=float)
+        vi_var_mean = np.mean(vi_var[idx], axis=0)
+        return self._sigma_batch_from_centered_mean(
+            centered_mean=centered_mean,
+            cov_sumk_znk_wk=cov_sumk_znk_wk,
+            vi_var_mean=vi_var_mean,
+            denom=denom,
+        )
+
     def update(self):
         centered_mean = self.eta_node.vi_mu - self.mu0_node.mu0 - self.w_z_node.E_w_z
 
-        # Below we compute: diag(Cov(\sum_k z_nk w_.k, \sum_k' z_nk' w_.k'))
-        # for l!= l' Cov(w_lk, w_l'k), so just diag needed
-        Ez2w2 = np.sum(
-            np.dot(self.w_z_node.E_z_squared, self.w_z_node.E_w_squared.T),
-            axis=0,
+        cov_sumk_znk_wk = _diag_cov_sum_k_z_w(
+            self.w_z_node.E_z_squared,
+            self.w_z_node.E_w_squared,
+            self.w_z_node.E_z,
+            self.w_z_node.E_w,
         )
-        Ezw_2 = np.sum(np.dot(self.w_z_node.E_z**2, self.w_z_node.E_w.T**2), axis=0)
-        cov_sumk_znk_wk = Ez2w2 - Ezw_2
 
         n = self.params.N - np.sum(self.params.maskNA_N)
 
-        self.Sigma0 = (
-            np.dot(centered_mean.T, centered_mean) / n
-            + np.diag(np.mean(self.eta_node.vi_var, axis=0))
-            + np.diag(cov_sumk_znk_wk) / n
+        self.Sigma0 = self._sigma_batch_from_centered_mean(
+            centered_mean=centered_mean,
+            cov_sumk_znk_wk=cov_sumk_znk_wk,
+            vi_var_mean=np.mean(self.eta_node.vi_var, axis=0),
+            denom=int(n),
         )
 
+        self.inv_Sigma0 = np.linalg.inv(self.Sigma0)
+        self.det_Sigma0 = np.linalg.det(self.Sigma0)
+
+    def svi_update(self, indices: np.ndarray, rho: float) -> None:
+        """Stochastic global update: mix batch MAP-style Sigma0
+        with ρ (MOFA-style SVI)."""
+        idx = np.asarray(indices, dtype=int)
+        if idx.size == 0:
+            return
+        sigma_batch = self._sigma_batch_from_indices(idx)
+        self.Sigma0 = (1.0 - rho) * self.Sigma0 + rho * sigma_batch
         self.inv_Sigma0 = np.linalg.inv(self.Sigma0)
         self.det_Sigma0 = np.linalg.det(self.Sigma0)
 
@@ -83,8 +141,23 @@ class nodeCTM_mu0:
         self.eta_node = eta_node
         self.w_z_node = w_z_node
 
+    def _mu_batch_from_indices(self, idx: np.ndarray) -> np.ndarray:
+        gm = np.asarray(self.eta_node.vi_mu, dtype=float) - np.asarray(
+            self.w_z_node.E_w_z, dtype=float
+        )
+        return np.mean(gm[idx], axis=0)
+
     def update(self):
-        self.mu0 = np.mean(self.eta_node.vi_mu - self.w_z_node.E_w_z, axis=0)
+        idx = np.arange(self.params.N, dtype=int)
+        self.mu0 = self._mu_batch_from_indices(idx)
+
+    def svi_update(self, indices: np.ndarray, rho: float) -> None:
+        """Stochastic global update: mix batch mean with ρ."""
+        idx = np.asarray(indices, dtype=int)
+        if idx.size == 0:
+            return
+        mu_batch = self._mu_batch_from_indices(idx)
+        self.mu0 = (1.0 - rho) * self.mu0 + rho * mu_batch
 
 
 class nodeCTM_w_z:
@@ -105,13 +178,13 @@ class nodeCTM_w_z:
         self.E_w_z_squared = np.dot(self.E_z**2, (self.E_w.T) ** 2)
 
     def MB(self):
-        pass
+        """Expectations are synced from FA in FACTM; no local message passing."""
 
     def update(self):
-        pass
+        """Updated externally via FACTM sync, not inside CTM.update."""
 
     def ELBO(self):
-        pass
+        """No separate ELBO term; W/Z are handled in the FA part of FACTM."""
 
 
 class nodeCTM_eta:
@@ -195,13 +268,7 @@ class nodeCTM_eta:
                     (1.0 * self.vi_mu[n, :], 1.0 * self.vi_var[n, :])
                 )
 
-                # a condition that variances are non-negative
-                bnds = tuple(
-                    map(
-                        lambda x: (-1e1, 1e1) if x < self.params.L else (EPS, 1e1),
-                        range(2 * self.params.L),
-                    )
-                )
+                bnds = [(-10.0, 10.0)] * self.params.L + [(EPS, 10.0)] * self.params.L
 
                 result = minimize(
                     f,
@@ -230,14 +297,12 @@ class nodeCTM_eta:
 
         centered_mean = self.vi_mu - self.w_z_node.E_w_z - self.mu0_node.mu0
 
-        # Below we compute: diag(Cov(\sum_k z_nk w_.k, \sum_k' z_nk' w_.k'))
-        # for l!= l' Cov(w_lk, w_l'k), so just diag needed
-        Ez2w2 = np.sum(
-            np.dot(self.w_z_node.E_z_squared, self.w_z_node.E_w_squared.T),
-            axis=0,
+        cov_sum_znk_wk = _diag_cov_sum_k_z_w(
+            self.w_z_node.E_z_squared,
+            self.w_z_node.E_w_squared,
+            self.w_z_node.E_z,
+            self.w_z_node.E_w,
         )
-        Ezw_2 = np.sum(np.dot(self.w_z_node.E_z**2, self.w_z_node.E_w.T**2), axis=0)
-        cov_sum_znk_wk = Ez2w2 - Ezw_2
 
         elbo += (
             -self.params.N * np.log(self.Sigma0_node.det_Sigma0) / 2
@@ -262,8 +327,6 @@ class nodeCTM_eta:
     ):
         term_xi = np.sum(vi_xi_par_n, axis=0)
 
-        if np.any((-np.log(vi_zeta_n) + vi_eta_mu_n + vi_eta_var_n / 2) > 1e2):
-            print("over")
         return (
             -np.sum(vi_eta_var_n * np.diag(Sigma_inv)) / 2
             - np.sum(
@@ -373,7 +436,7 @@ class nodeCTM_beta:
     def __init__(self, alpha, vi_alpha, params: CTMParams):
         self.params = params
 
-        # N x L x G
+        # Scalar Dirichlet hyperparameter alpha; variational vi_alpha is (L, G).
         self.alpha = alpha
         self.vi_alpha = vi_alpha
 
@@ -392,22 +455,38 @@ class nodeCTM_beta:
         self.xi_node = xi_node
         self.y_node = y_node
 
+    def _vi_alpha_batch_from_indices(self, indices) -> np.ndarray:
+        vi_alpha_batch = self.alpha * np.ones((self.params.L, self.params.G))
+        for n in indices:
+            nn = int(n)
+            if not self.params.maskNA_N[nn]:
+                vi_alpha_batch += np.dot(
+                    self.xi_node.vi_par[nn].T, self.y_node.data[nn]
+                )
+        return vi_alpha_batch
+
     def update(self):
-        vi_alpha = self.alpha * np.ones((self.params.L, self.params.G))
+        self.vi_alpha = self._vi_alpha_batch_from_indices(range(self.params.N))
 
-        for n in range(self.params.N):
-            if not self.params.maskNA_N[n]:
-                vi_alpha += np.dot(self.xi_node.vi_par[n].T, self.y_node.data[n])
+        self._recompute_beta_cache()
 
-        self.vi_alpha = vi_alpha
-
-        sum_alpha_tmp = np.sum(vi_alpha, axis=1)
-
+    def _recompute_beta_cache(self) -> None:
+        sum_alpha_tmp = np.sum(self.vi_alpha, axis=1)
         self.lnGamma_sum_vi_alpha = gammaln(sum_alpha_tmp)
-        self.sum_lnGamma_vi_alpha = np.sum(gammaln(vi_alpha), axis=1)
-
+        self.sum_lnGamma_vi_alpha = np.sum(gammaln(self.vi_alpha), axis=1)
         self.digamma_vi_alpha = digamma(self.vi_alpha)
         self.digamma_sum_vi_alpha = digamma(sum_alpha_tmp)
+
+    def svi_update(self, indices: np.ndarray, rho: float) -> None:
+        """
+        Stochastic global update for topic Dirichlet parameters.
+
+        Sum word-count statistics over ``indices`` (typically length N with
+        repeated minibatch indices, matching FA SVI).
+        """
+        vi_alpha_batch = self._vi_alpha_batch_from_indices(indices)
+        self.vi_alpha = (1.0 - rho) * self.vi_alpha + rho * vi_alpha_batch
+        self._recompute_beta_cache()
 
     def ELBO(self):
         elbo = (
@@ -453,33 +532,23 @@ class nodeCTM_y:
         self.elbo = elbo
 
 
-def starting_params_Sigma(starting_params, L):
-    if "Sigma" in starting_params.keys():
-        Sigma = 1 * starting_params["Sigma"]
-    else:
-        Sigma = np.eye(L)
-
-    return Sigma
+def starting_params_Sigma(starting_params: dict, L: int) -> np.ndarray:
+    if "Sigma" in starting_params:
+        return np.array(starting_params["Sigma"], copy=True)
+    return np.eye(L)
 
 
-def starting_params_mu(starting_params, L):
-    if "mu" in starting_params.keys():
-        mu = 1 * starting_params["mu"]
-    else:
-        mu = np.zeros(L)
-
-    return mu
+def starting_params_mu(starting_params: dict, L: int) -> np.ndarray:
+    if "mu" in starting_params:
+        return np.array(starting_params["mu"], copy=True)
+    return np.zeros(L)
 
 
-def starting_params_beta(starting_params, L, G):
-    if "topics" in starting_params.keys():
-        topics = 1 * starting_params["topics"]
-
-    else:
-        # par=100*1 so the distribution is close to uniform but not uniform
-        topics = np.random.dirichlet(100 * np.ones(G), size=L)
-
-    return topics
+def starting_params_beta(starting_params: dict, L: int, G: int) -> np.ndarray:
+    if "topics" in starting_params:
+        return np.array(starting_params["topics"], copy=True)
+    # Dirichlet(100): nearly uniform but not exactly uniform.
+    return np.random.dirichlet(100 * np.ones(G), size=L)
 
 
 class CTM:
@@ -488,7 +557,14 @@ class CTM:
     """
 
     def __init__(
-        self, data, N, L, G, K, starting_params=None, FA=True, *args, **kwargs
+        self,
+        data,
+        N: int,
+        L: int,
+        G: int,
+        K: int,
+        starting_params: dict | None = None,
+        FA: bool = True,
     ):
         self.N = N
         self.L = L
@@ -500,29 +576,22 @@ class CTM:
         if starting_params is None:
             starting_params = {}
 
-        # compute I and J from data:
         I_per_n = []
-        J_per_n = []
         maskNA = []
         init_xi_par = []
 
         for n in range(N):
             data_n = data[n]
-
             I_n = data_n.shape[0]
-            J_n = np.sum(data_n, axis=1)
             maskNA_n = I_n == 0
 
             I_per_n.append(I_n)
-            J_per_n.append(J_n)
             maskNA.append(maskNA_n)
-
             init_xi_par.append(np.ones((I_n, L)) / L)
 
         self.I_per_n = I_per_n
-        self.J_per_n = J_per_n
         self.maskNA_N = maskNA
-        self.maskNA_N_L = np.outer(self.maskNA_N, self.L * [True])
+        self.maskNA_N_L = np.outer(self.maskNA_N, np.ones(L, dtype=bool))
 
         # Create shared parameters object
         self.params = CTMParams(
@@ -530,12 +599,10 @@ class CTM:
             L=self.L,
             G=self.G,
             I_per_n=self.I_per_n,
-            J_per_n=self.J_per_n,
             maskNA_N=self.maskNA_N,
             maskNA_N_L=self.maskNA_N_L,
         )
 
-        # CREATING NODES:
         Sigma0 = starting_params_Sigma(starting_params, self.L)
         self.node_Sigma0 = nodeCTM_Sigma0(Sigma0, params=self.params)
 
@@ -591,6 +658,24 @@ class CTM:
         self.node_mu0.update()
         self.node_Sigma0.update()
 
+    def update_svi(self, indices: np.ndarray, rho: float) -> None:
+        """
+        One SVI step: locals on unique indices; globals mixed with ρ using the
+        same repeated-minibatch convention as FA (sums over ``indices``).
+        """
+        idx = np.asarray(indices, dtype=int)
+        uniq = np.unique(idx)
+        self.node_xi.update(indices=uniq)
+        self.node_eta.update(indices=uniq)
+
+        mask_arr = np.asarray(self.params.maskNA_N, dtype=bool)
+        idx_obs = idx[~mask_arr[idx]]
+
+        self.node_beta.svi_update(idx, rho=rho)
+        if idx_obs.size > 0:
+            self.node_mu0.svi_update(idx_obs, rho=rho)
+            self.node_Sigma0.svi_update(idx_obs, rho=rho)
+
     def ELBO(self):
         self.node_xi.ELBO()
         self.node_eta.ELBO()
@@ -606,5 +691,5 @@ class CTM:
 
         self.elbo = elbo
 
-    def get_elbo(self):
+    def get_elbo(self) -> float:
         return self.elbo

@@ -17,6 +17,65 @@ from ..utils import log_eps
 EPS = 1e-20
 
 
+def _fa_w_k_nominator_denominator(
+    w_node: "nodeFA_w_m",
+    z_node: Any,
+    y_node: Any,
+    tau_node: Any,
+    k: int,
+    indices: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    if indices is None:
+        indices = np.arange(z_node.params.N)
+
+    z_k = z_node.E_z[indices, k]
+    z2_k = z_node.E_z_squared[indices, k]
+
+    nominator_second_term_tmp = np.dot(w_node.E_w, z_node.E_z[indices].T * z_k).T
+    nominator_second_term = nominator_second_term_tmp - np.outer(
+        z_k**2, w_node.E_w[:, k]
+    )
+
+    nominator = np.ma.sum(
+        tau_node.E_tau[indices]
+        * ((y_node.data[indices].T * z_k).T - nominator_second_term),
+        axis=0,
+    )
+    denominator = (
+        np.ma.dot(z2_k, tau_node.E_tau[indices]) + w_node.alpha_m_node.E_alpha[k]
+    )
+    return nominator, denominator
+
+
+def _ctm_w_k_nominator_denominator(
+    w_node: "nodeFA_w_m",
+    z_node: Any,
+    y_node: Any,
+    tau_node: Any,
+    k: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    E_zE_zk = np.dot(z_node.E_z.T, z_node.E_z[:, k])
+    E_zE_zk[k] = 0
+    EwE_zE_zk = np.dot(w_node.E_w, E_zE_zk)
+    term1 = np.dot(tau_node.Sigma0_inv, EwE_zE_zk)
+
+    Ez_squaredk = np.sum(z_node.E_z_squared[:, k])
+    Sigma_inv_nodiag = tau_node.Sigma0_inv - np.diag(np.diag(tau_node.Sigma0_inv))
+    term2 = np.dot(Sigma_inv_nodiag, w_node.E_w[:, k]) * Ez_squaredk
+
+    term3 = np.dot(
+        z_node.E_z[:, k],
+        np.ma.dot(y_node.data, tau_node.Sigma0_inv),
+    )
+
+    nominator = term3 - term1 - term2
+    denominator = np.diag(
+        w_node.alpha_m_node.E_alpha[k] * np.eye(w_node.D)
+        + np.sum(z_node.E_z_squared[:, k]) * tau_node.Sigma0_inv
+    )
+    return nominator, denominator
+
+
 class nodeFA_hat_w_m:
     """
     Class to update variational params of W_hat node
@@ -62,10 +121,9 @@ class nodeFA_alpha_m:
     def update_k(self, k):
         self.vi_b[k] = self.b0 + np.sum(self.w_m_node.E_hat_w_squared[:, k]) / 2
 
-        # alpha small -> w_hat big TBD - check
+        # Keep E[alpha] and E[1/alpha] away from numerical extremes.
         if self.vi_a[k] / self.vi_b[k] < EPS:
             self.vi_b[k] = self.vi_a[k] / EPS
-        # alpha big -> w_hat small and potentially not significant
         if self.vi_b[k] / (self.vi_a[k] - 1) < EPS:
             self.vi_b[k] = (self.vi_a[k] - 1) * EPS
 
@@ -77,7 +135,6 @@ class nodeFA_alpha_m:
         self.E_log_alpha = -log_eps(self.vi_b) + self.digamma_vi_a
 
     def update_all_params(self):
-        # including params that are const.
         self.log_gamma_a0 = gammaln(self.a0)
         self.log_gamma_vi_a = gammaln(self.vi_a)
         self.digamma_vi_a = digamma(self.vi_a)
@@ -127,57 +184,19 @@ class ARDWPrior(WPriorBase):
         self, w_node: "nodeFA_w_m", k: int, z_node: Any, y_node: Any, tau_node: Any
     ):
         """Update W node for factor k for ARD prior."""
-        if not w_node.is_ctm:
-            # For FA likelihoods (Normal/Bernoulli)
-            nominator_second_term_tmp = np.dot(
-                w_node.E_w, z_node.E_z.T * z_node.E_z[:, k]
-            ).T
-            nominator_second_term = nominator_second_term_tmp - np.outer(
-                z_node.E_z[:, k] ** 2, w_node.E_w[:, k]
+        if w_node.is_ctm:
+            nominator, denominator = _ctm_w_k_nominator_denominator(
+                w_node, z_node, y_node, tau_node, k
             )
-            nominator = np.ma.sum(
-                tau_node.E_tau
-                * ((y_node.data.T * z_node.E_z[:, k]).T - nominator_second_term),
-                axis=0,
-            )
-
-            denominator = (
-                np.ma.dot(z_node.E_z_squared[:, k], tau_node.E_tau)
-                + w_node.alpha_m_node.E_alpha[k]
-            )
-
-            w_node.hat_w_m_node.update_k(k, nominator, denominator)
-            w_node.update_params()
-            w_node.update_params_z()
-            w_node.alpha_m_node.update_k(k)
         else:
-            # For CTM likelihood
-            E_zE_zk = np.dot(z_node.E_z.T, z_node.E_z[:, k])
-            E_zE_zk[k] = 0
-            EwE_zE_zk = np.dot(w_node.E_w, E_zE_zk)
-            term1 = np.dot(tau_node.Sigma0_inv, EwE_zE_zk)
-
-            Ez_squaredk = np.sum(z_node.E_z_squared[:, k])
-            Sigma_inv_nodiag = tau_node.Sigma0_inv - np.diag(
-                np.diag(tau_node.Sigma0_inv)
-            )
-            term2 = np.dot(Sigma_inv_nodiag, w_node.E_w[:, k]) * Ez_squaredk
-
-            term3 = np.dot(
-                z_node.E_z[:, k],
-                np.ma.dot(y_node.data, tau_node.Sigma0_inv),
+            nominator, denominator = _fa_w_k_nominator_denominator(
+                w_node, z_node, y_node, tau_node, k
             )
 
-            nominator = term3 - term1 - term2
-
-            denominator = np.diag(
-                w_node.alpha_m_node.E_alpha[k] * np.eye(w_node.D)
-                + np.sum(z_node.E_z_squared[:, k]) * (tau_node.Sigma0_inv)
-            )
-            w_node.hat_w_m_node.update_k(k, nominator, denominator)
-            w_node.update_params()
-            w_node.update_params_z()
-            w_node.alpha_m_node.update_k(k)
+        w_node.hat_w_m_node.update_k(k, nominator, denominator)
+        w_node.update_params()
+        w_node.update_params_z()
+        w_node.alpha_m_node.update_k(k)
 
     def update_params(self, w_node: "nodeFA_w_m"):
         """Update E_w and E_w_squared for ARD prior."""
@@ -212,23 +231,7 @@ class ARDWPrior(WPriorBase):
         if w_node.is_ctm:
             raise NotImplementedError("SVI globals for CTM-injected W not supported.")
 
-        z_k = z_node.E_z[indices, k]
-        z2_k = z_node.E_z_squared[indices, k]
-
-        nominator_second_term_tmp = np.dot(w_node.E_w, z_node.E_z[indices].T * z_k).T
-        nominator_second_term = nominator_second_term_tmp - np.outer(
-            z_k**2, w_node.E_w[:, k]
+        nominator, denominator = _fa_w_k_nominator_denominator(
+            w_node, z_node, y_node, tau_node, k, indices
         )
-
-        nominator = np.ma.sum(
-            tau_node.E_tau[indices]
-            * ((y_node.data[indices].T * z_k).T - nominator_second_term),
-            axis=0,
-        )
-        denominator = (
-            np.ma.dot(z2_k, tau_node.E_tau[indices]) + w_node.alpha_m_node.E_alpha[k]
-        )
-
-        mu = nominator / denominator
-        var = 1.0 / denominator
-        return {"mu": mu, "var": var}
+        return {"mu": nominator / denominator, "var": 1.0 / denominator}

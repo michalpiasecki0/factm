@@ -2,6 +2,7 @@
 Factory functions to create Z prior objects from enums.
 """
 from ..enums import ZPrior
+from .base import ZPriorBase
 from .Cohort import CohortZPrior
 from .Informed import InformedZPrior
 from .StdNormal import StdNormalZPrior
@@ -25,13 +26,13 @@ def create_z_prior(
     K: int | None = None,
     cohort_prior_config=None,
     cohorts=None,
-):
+) -> ZPriorBase:
     """Create a Z prior object from an enum."""
     if prior_enum == ZPrior.STD_NORMAL:
         return StdNormalZPrior()
-    elif prior_enum == ZPrior.INFORMED:
+    if prior_enum == ZPrior.INFORMED:
         return InformedZPrior()
-    elif prior_enum == ZPrior.COHORT:
+    if prior_enum == ZPrior.COHORT:
         if cohorts is None:
             raise ValueError(
                 "Cohort Z prior requires cohort assignments in Views.cohorts."
@@ -49,11 +50,14 @@ def create_z_prior(
             a0_tau=cohort_prior_config.a0_tau,
             b0_tau=cohort_prior_config.b0_tau,
         )
-    else:
-        raise ValueError(f"Unknown Z prior: {prior_enum}")
+    raise ValueError(f"Unknown Z prior: {prior_enum}")
 
 
-def create_z_priors(prior_enums, cohort_prior_config=None, cohorts=None):
+def create_z_priors(
+    prior_enums: list[ZPrior],
+    cohort_prior_config=None,
+    cohorts=None,
+) -> list[ZPriorBase]:
     """Create a list of Z prior objects from enum list."""
     K = len(prior_enums)
     return [

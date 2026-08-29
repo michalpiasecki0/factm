@@ -1,28 +1,20 @@
 """
 Enum definitions for FACTM model configuration.
 
-This module contains all enum types used throughout the codebase.
-Separated from model_config to avoid circular import dependencies.
+Kept separate from ``model_config`` to avoid circular imports.
 """
-
 from enum import Enum
 
 
 class FA_Pretrain(Enum):
-    """Supported FA pretrain types."""
+    """FA weight initialisation strategies used in ``FACTModel.pretrain``."""
 
     PCA = "PCA"
     FA = "FA"
 
 
-class CTM_pretrain(Enum):
-    """Supported CTM pretrain types."""
-
-    CTM = "CTM"
-
-
 class Likelihood(Enum):
-    """Supported likelihood types for data views."""
+    """Likelihood type for a simple (FA) view."""
 
     NORMAL = "normal"
     BERNOULLI = "Bernoulli"
@@ -30,7 +22,7 @@ class Likelihood(Enum):
 
 
 class WPrior(Enum):
-    """Supported weight prior types."""
+    """Weight prior for a view (simple or structured)."""
 
     NONE = "None"
     ARD = "ARD"
@@ -39,7 +31,7 @@ class WPrior(Enum):
 
 
 class ZPrior(Enum):
-    """Supported latent factor prior types."""
+    """Latent factor prior, one entry per factor."""
 
     STD_NORMAL = "stdN"
     INFORMED = "informed"

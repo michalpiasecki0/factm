@@ -1,5 +1,6 @@
 *__pycache__*
 fitted_mofa
+fitted_factm
 data
 
 # Auto detect text files and perform LF normalization
@@ -11,3 +12,9 @@ data
 .claude
 w_loading_tests.executed.ipynb
 Su_*
+*.pkl
+cohort_tests_notebooks/.fit_cache/
+cohort_tests_notebooks/.fit_cache_immucan/
+*copy*.ipynb
+*bad.ipynb
+*.joblib
