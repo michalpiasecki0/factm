@@ -30,24 +30,28 @@ class nodeFA_s_m:
         self.D = D
         self.vi_lambda = vi_lambda
         self.vi_gamma = 1 / (1 + np.exp(-vi_lambda))
+        # Variance of q(w_hat | s = 0) = N(0, v0); optimal at 1 / E[alpha].
+        # Set from the alpha node in ARD_SSWPrior.create_nodes.
+        self.v0 = np.ones(vi_lambda.shape[1])
 
     def MB(self):
         pass
 
     def update_k(self, k, nominator, denominator, E_alpha, E_log_LR_theta):
+        # Paired family q(s, w_hat) = q(s) q(w_hat | s), q(w_hat | s=0) = N(0, v0),
+        # v0 = 1 / E[alpha]. The optimal log-odds is
+        #   E[log theta] - E[log(1 - theta)] + 1/2 log(E[alpha] / Lambda)
+        #   + nu^2 / (2 Lambda),   Lambda = denominator, nu = nominator.
+        # (Previously the log(Lambda) term had a + sign, and lambda was clipped
+        # below at log(D - 1), which forced P(s = 1) >= (D - 1) / D.)
+        self.v0[k] = 1.0 / E_alpha
         lambda_k = (
             E_log_LR_theta
             + log_eps(E_alpha) / 2
-            + log_eps(denominator) / 2
+            - log_eps(denominator) / 2
             + (nominator**2) / (2 * denominator)
         )
-
-        # max value for lambda -> if it is reached, then P(S=1) = 1
-        # if np.any(lambda_k > -np.log(EPS)):
-        lambda_k[lambda_k > -np.log(EPS)] = -np.log(EPS)
-        # min value for lambda -> if it is reached, then P(S=1) = 1/D_m
-        # if np.any(lambda_k < np.log(self.D[self.m]-1)):
-        lambda_k[lambda_k < np.log(self.D - 1)] = np.log(self.D - 1)
+        lambda_k = np.clip(lambda_k, -50.0, 50.0)  # numerical guard only
 
         self.vi_lambda[:, k] = lambda_k
         self.vi_gamma[:, k] = 1 / (1 + np.exp(-lambda_k))
@@ -115,6 +119,7 @@ class ARD_SSWPrior(WPriorBase):
 
         s_lambda = starting_params_s_m(starting_params, m, D, K)
         node_s = nodeFA_s_m(s_lambda, D, params=params)
+        node_s.v0 = 1.0 / node_alpha_m.E_alpha
         node_theta_m = nodeFA_theta_m(
             1, 1, 99 * np.ones(K), np.ones(K), D, params=params
         )
@@ -180,12 +185,7 @@ class ARD_SSWPrior(WPriorBase):
 
         w_node.E_hat_w_squared = w_node.s_m_node.vi_gamma * (
             w_node.hat_w_m_node.vi_var + w_node.hat_w_m_node.vi_mu**2
-        ) + (1 - w_node.s_m_node.vi_gamma) * (
-            np.outer(
-                np.ones(w_node.D),
-                w_node.alpha_m_node.E_inv_alpha,
-            )
-        )
+        ) + (1 - w_node.s_m_node.vi_gamma) * w_node.s_m_node.v0
 
     def compute_elbo(self, w_node: "nodeFA_w_m") -> float:
         """Compute ELBO for ARD_SS prior."""
@@ -200,20 +200,14 @@ class ARD_SSWPrior(WPriorBase):
             - np.sum(xlogx(w_node.s_m_node.vi_gamma))
             - np.sum(xlogx(1 - w_node.s_m_node.vi_gamma))
         )
-        elbo_w_hat = (
-            w_node.D * np.sum(w_node.alpha_m_node.E_log_alpha) / 2
-            - (
-                np.sum(
-                    np.dot(
-                        (1 - w_node.s_m_node.vi_gamma),
-                        w_node.alpha_m_node.E_log_alpha,
-                    )
-                )
-                / 2
-            )
-            - np.sum(np.dot(w_node.E_hat_w_squared, w_node.alpha_m_node.E_alpha)) / 2
-            + np.sum(w_node.s_m_node.vi_gamma * log_eps(w_node.hat_w_m_node.vi_var)) / 2
-        )
+        g = w_node.s_m_node.vi_gamma
+        a = w_node.alpha_m_node
+        mu, var = w_node.hat_w_m_node.vi_mu, w_node.hat_w_m_node.vi_var
+        v0 = w_node.s_m_node.v0
+        # E log p(w_hat | alpha) + H[q(w_hat | s)] per element, for each branch.
+        slab = 0.5 * a.E_log_alpha - 0.5 * a.E_alpha * (var + mu**2) + 0.5 * log_eps(var) + 0.5
+        spike = 0.5 * a.E_log_alpha - 0.5 * a.E_alpha * v0 + 0.5 * log_eps(v0) + 0.5
+        elbo_w_hat = np.sum(g * slab + (1 - g) * spike)
         return elbo_s + elbo_w_hat
 
     def get_additional_nodes_to_update(self) -> list:
@@ -258,11 +252,10 @@ class ARD_SSWPrior(WPriorBase):
         lambda_k = (
             E_log_LR_theta
             + log_eps(w_node.alpha_m_node.E_alpha[k]) / 2
-            + log_eps(denominator) / 2
+            - log_eps(denominator) / 2
             + (nominator**2) / (2 * denominator)
         )
-        lambda_k[lambda_k > -np.log(EPS)] = -np.log(EPS)
-        lambda_k[lambda_k < np.log(w_node.D - 1)] = np.log(w_node.D - 1)
+        lambda_k = np.clip(lambda_k, -50.0, 50.0)
         gamma_k = 1.0 / (1.0 + np.exp(-lambda_k))
 
         return {

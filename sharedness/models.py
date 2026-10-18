@@ -27,6 +27,8 @@ from src.views import Views
 from .priors import (
     CohortPiState,
     LearnablePiCohortPrior,
+    MaskedSSViewConfig,
+    ScaleFreeCohortPrior,
     SwitchState,
     SwitchViewConfig,
 )
@@ -101,6 +103,8 @@ def build_model(
     slab_var: float = 1.0,
     h_init: float = 0.99,
     cohort_fixed_lambda: float | None = None,
+    kappa: float = 1.0,
+    reference=None,
 ) -> tuple[FACTModel, SwitchState | None, CohortPiState | None]:
     M = views.num_simple
     switch = None
@@ -110,12 +114,16 @@ def build_model(
                              slab=slab, slab_var=slab_var, h_init=h_init)
         vcfg = [SwitchViewConfig(likelihood=Likelihood.NORMAL, w_prior=WPrior.ARD,
                                  state=switch) for _ in range(M)]
+    elif w == "masked_SS":  # frozen view pattern + corrected element spike-and-slab
+        mask = np.asarray(frozen_mask, dtype=int)
+        vcfg = [MaskedSSViewConfig(likelihood=Likelihood.NORMAL, w_prior=WPrior.ARD_SS,
+                                   mask_row=mask[m]) for m in range(M)]
     else:
-        enum = {"NONE": WPrior.NONE, "ARD": WPrior.ARD}[w]
+        enum = {"NONE": WPrior.NONE, "ARD": WPrior.ARD, "ARD_SS": WPrior.ARD_SS}[w]
         vcfg = [SimpleViewConfig(likelihood=Likelihood.NORMAL, w_prior=enum)
                 for _ in range(M)]
 
-    z_enum = ZPrior.STD_NORMAL if z == "std" else ZPrior.COHORT
+    z_enum = ZPrior.STD_NORMAL if z == "std" else ZPrior.COHORT  # cohort_* replace it below
     hp = CohortPriorConfig(pi=cohort_pi)
     cfg = ModelConfig(simple_view_configs=vcfg, structured_view_configs=[],
                       z_priors=[z_enum] * K, cohort_prior_config=hp)
@@ -123,6 +131,18 @@ def build_model(
         model = FACTModel(views=views, K=K, model_config=cfg, seed=seed)
 
     cps = None
+    if z == "cohort_sf":
+        C = len(np.unique(labels))
+        cps = CohortPiState(K=K, C=C, mode=cohort_pi_mode, pi_fixed=cohort_pi,
+                            a0=beta_a0, b0=beta_b0)
+        if reference == "largest":
+            labs, cnt = np.unique(labels, return_counts=True)
+            reference = labs[np.argmax(cnt)]
+        priors = [ScaleFreeCohortPrior(labels, k=k, state=cps, kappa=kappa,
+                                       reference=reference) for k in range(K)]
+        cps.priors = priors
+        cps.refresh_logits()
+        model.fa.node_z.z_priors = priors
     if z == "cohort_learn_pi":
         C = len(np.unique(labels))
         cps = CohortPiState(K=K, C=C, mode=cohort_pi_mode, pi_fixed=cohort_pi,
@@ -236,13 +256,17 @@ def _fit_job(args) -> tuple:
 
 def fit_from_state(ds, K: int, Z0: np.ndarray, W0s: list[np.ndarray],
                    max_iter: int = 300, elbo_tres: float = 1e-3, seed: int = 0,
+                   rel_tol: float | None = None,
                    z_var: np.ndarray | float = 1e-2, w_var: list | float = 1e-2,
                    alpha_from=None, tau_from=None, **arm) -> Fit:
     """Start a model at given factor and loading means, then run CAVI.
 
     Used for (a) the warm-started switch (start = a converged ARD fit) and
-    (b) the truth start of Q2b (start = the generating Z and W)."""
-    model, switch, _ = build_model(ds.views, ds.labels, K, z="std", seed=seed, **arm)
+    (b) the truth start of Q2b (start = the generating Z and W) and (c) every
+    start of the multi-start pipeline. Stops when the ELBO gain falls below
+    ``rel_tol * |ELBO|`` (if given) or below ``elbo_tres`` (absolute)."""
+    arm.setdefault("z", "std")
+    model, switch, cps = build_model(ds.views, ds.labels, K, seed=seed, **arm)
     np.random.seed(seed)
     with quiet():
         model.MB()
@@ -272,9 +296,13 @@ def fit_from_state(ds, K: int, Z0: np.ndarray, W0s: list[np.ndarray],
             model.update()
             model.ELBO()
             elbo.append(model.get_elbo())
-            if len(elbo) > 1 and elbo[-1] - elbo[-2] < elbo_tres:
-                break
-    return Fit(model, switch, None, elbo, dict(arm, K=K, seed=seed))
+            if len(elbo) > 1:
+                gain = elbo[-1] - elbo[-2]
+                if rel_tol is not None and gain < rel_tol * abs(elbo[-1]):
+                    break
+                if rel_tol is None and gain < elbo_tres:
+                    break
+    return Fit(model, switch, cps, elbo, dict(arm, K=K, seed=seed))
 
 
 def fit_switch_warm(ds, K: int, ard_iter: int = 300, max_iter: int = 300,

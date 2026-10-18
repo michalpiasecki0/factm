@@ -127,7 +127,7 @@ class SwitchState:
     frozen_mask: np.ndarray | None = None
     h_init: float = 0.99
     slab: str = "ard"  # "ard": learned alpha_mk; "fixed": alpha = 1 / slab_var
-    slab_var: float = 1.0
+    slab_var: float | np.ndarray = 1.0  # one value, or one per view
     E_h: np.ndarray = field(init=False)
     pis: list[BetaPi] = field(init=False)
 
@@ -210,9 +210,11 @@ class ViewSwitchWPrior(WPriorBase):
         }
 
     def _pin_alpha(self, node) -> None:
-        """Fixed slab: alpha_mk = 1 / slab_var exactly. q(alpha) is a point mass,
-        so its own ELBO term is dropped (``get_additional_nodes_to_update``)."""
-        a = 1.0 / self.state.slab_var
+        """Fixed slab: alpha_mk = 1 / slab_var exactly (``slab_var`` may be one value
+        per view). q(alpha) is a point mass, so its own ELBO term is dropped
+        (``get_additional_nodes_to_update``)."""
+        sv = np.atleast_1d(np.asarray(self.state.slab_var, dtype=float))
+        a = 1.0 / (sv[self.m] if len(sv) > 1 else sv[0])
         node.E_alpha = np.full(self.state.K, a)
         node.E_inv_alpha = np.full(self.state.K, 1.0 / a)
         node.E_log_alpha = np.full(self.state.K, np.log(a))
@@ -349,11 +351,13 @@ class CohortPiState:
 
     def update(self, k: int) -> None:
         if self.learns:
+            # A prior may exclude cohorts from the switch (reference coding).
+            free = [p.free_gamma() if hasattr(p, "free_gamma") else p.E_gamma
+                    for p in self.priors]
             if self.per_factor:
-                self.pis[k].update(self.priors[k].E_gamma.sum(), self.C)
+                self.pis[k].update(free[k].sum(), len(free[k]))
             else:
-                total = sum(p.E_gamma.sum() for p in self.priors)
-                self.pis[0].update(total, self.C * self.K)
+                self.pis[0].update(sum(f.sum() for f in free), sum(len(f) for f in free))
         self.refresh_logits()
 
 
@@ -463,3 +467,168 @@ class LearnablePiCohortPrior(CohortZPrior):
         if self.state.learns and (self.state.per_factor or self.k == 0):
             elbo += self.state.pi_for(self.k).elbo()
         return float(elbo)
+
+
+# ---------------------------------------------------------------------------
+# Scale-free paired cohort prior (the cohort prior of the final model)
+# ---------------------------------------------------------------------------
+
+
+class ScaleFreeCohortPrior(CohortZPrior):
+    """Cohort prior for factor k with a paired, scale-free spike-and-slab shift.
+
+    Model (cohort c, factor k):
+        z_nk | c        ~ N(gamma_c delta_c, 1 / tau_c)
+        delta_c | tau_c ~ N(0, 1 / (kappa tau_c))      <- shift in units of the
+        tau_c           ~ Gamma(a0, b0)                    cohort's own spread
+        gamma_c         ~ Bern(pi),  pi from ``CohortPiState``
+    Variational family (paired):
+        q(tau_c) = Gamma(a_c, b_c), q(gamma_c) = Bern(g_c),
+        q(delta_c | gamma_c = 1) = N(mu_c, v_c),  q(delta_c | gamma_c = 0) = N(0, v0_c).
+    Optimal updates, with n_c samples and S_c = sum_{n in c} E[z_nk]:
+        mu_c = S_c / (kappa + n_c),   v_c = 1 / (E[tau_c] (kappa + n_c)),
+        v0_c = 1 / (kappa E[tau_c]),
+        logit g_c = E log pi - E log(1 - pi) - 1/2 log(1 + n_c / kappa)
+                    + E[tau_c] S_c^2 / (2 (kappa + n_c)),
+        a_c = a0 + (n_c + 1) / 2,
+        b_c = b0 + 1/2 (sum E[z^2] - 2 g mu S + n g (v + mu^2))
+                 + kappa/2 (g (v + mu^2) + (1 - g) v0).
+    The Occam term -1/2 log(1 + n_c / kappa) does not depend on the scale of
+    the factor. ``reference``: that cohort has no switch (gamma = 0, excluded
+    from pi), so the other cohorts' shifts are measured against it.
+    """
+
+    def __init__(self, cohorts, k: int, state: "CohortPiState", kappa: float = 1.0,
+                 reference=None, a0_tau: float = 1.0, b0_tau: float = 1.0):
+        super().__init__(cohorts, pi=0.5, a_lambda=1.0, b_lambda=1.0,
+                         a0_tau=a0_tau, b0_tau=b0_tau)
+        self.k, self.state, self.kappa = k, state, float(kappa)
+        C = self.cohort.C
+        self.free = np.ones(C, dtype=bool)
+        if reference is not None:
+            self.free[list(self.cohort.labels).index(reference)] = False
+        self.tau_a = self.a0_tau + (self.cohort.counts + 1) / 2.0
+        self.tau_b = np.full(C, self.b0_tau + 1.0)
+        self.gamma_prob = np.where(self.free, 0.5, 1e-12)
+        self.delta_mu = np.zeros(C)
+        self.delta_var = np.ones(C)
+        self._update_expectations()
+        self.v0 = 1.0 / (self.kappa * self.E_tau)
+
+    # ---- pi bookkeeping (used by CohortPiState) ----
+    def free_gamma(self) -> np.ndarray:
+        return self.E_gamma[self.free]
+
+    # ---- updates ----
+    def _update_cohort_params(self, z_node, k: int) -> None:
+        idx, counts = self.cohort.cohort_indices, self.cohort.counts
+        C = self.cohort.C
+        S = np.bincount(idx, weights=np.asarray(z_node.E_z[:, self.k], float), minlength=C)
+        S2 = np.bincount(idx, weights=np.asarray(z_node.E_z_squared[:, self.k], float),
+                         minlength=C)
+        Et = self.E_tau
+        # q(delta | gamma) and q(gamma), given q(tau)
+        self.delta_mu = S / (self.kappa + counts)
+        self.delta_var = 1.0 / (Et * (self.kappa + counts))
+        self.v0 = 1.0 / (self.kappa * Et)
+        u = (self.logit_pi - 0.5 * np.log1p(counts / self.kappa)
+             + Et * S**2 / (2.0 * (self.kappa + counts)))
+        g = 1.0 / (1.0 + np.exp(-np.clip(u, -60.0, 60.0)))
+        self.gamma_prob = np.where(self.free, np.clip(g, 1e-12, 1 - 1e-12), 1e-12)
+        self._update_expectations()
+        # q(tau)
+        g, mu, v, v0 = self.E_gamma, self.delta_mu, self.delta_var, self.v0
+        self.tau_a = self.a0_tau + (counts + 1) / 2.0
+        self.tau_b = np.maximum(
+            self.b0_tau
+            + 0.5 * (S2 - 2.0 * g * mu * S + counts * g * (v + mu**2))
+            + 0.5 * self.kappa * (g * (v + mu**2) + (1 - g) * v0), 1e-20)
+        self._update_expectations()
+        self.state.update(self.k)
+
+    # ---- ELBO ----
+    def compute_elbo_k(self, z_node, k: int) -> float:
+        from scipy.special import digamma as psi, gammaln
+
+        idx, counts = self.cohort.cohort_indices, self.cohort.counts
+        C = self.cohort.C
+        S = np.bincount(idx, weights=np.asarray(z_node.E_z[:, k], float), minlength=C)
+        S2 = np.bincount(idx, weights=np.asarray(z_node.E_z_squared[:, k], float),
+                         minlength=C)
+        slv = np.bincount(idx, weights=np.asarray(log_eps(z_node.vi_var[:, k]), float),
+                          minlength=C)
+        l2p = np.log(2 * np.pi)
+        g, mu, v, v0 = self.E_gamma, self.delta_mu, self.delta_var, self.v0
+        Et, Elt = self.E_tau, self.E_log_tau
+        # E log p(z | gamma, delta, tau) + H[q(z)]
+        resid = S2 - 2 * g * mu * S + counts * g * (v + mu**2)
+        log_p_z = 0.5 * np.sum(counts * (Elt - l2p) - Et * resid)
+        ent_z = 0.5 * np.sum(counts * (1 + l2p) + slv)
+        # E log p(delta | tau) + H[q(delta | gamma)]   (2 pi terms cancel)
+        delta = np.sum(
+            0.5 * (np.log(self.kappa) + Elt)
+            - 0.5 * self.kappa * Et * (g * (v + mu**2) + (1 - g) * v0)
+            + 0.5 * (g * log_eps(v) + (1 - g) * log_eps(v0)) + 0.5)
+        # E log p(gamma | pi) + H[q(gamma)], free cohorts only
+        lp, l1p = self.state.E_logs(self.k)
+        gf = g[self.free]
+        gam = np.sum(gf * lp + (1 - gf) * l1p) - np.sum(xlogx(gf) + xlogx(1 - gf))
+        # E log p(tau) + H[q(tau)]
+        a, b, a0, b0 = self.tau_a, self.tau_b, self.a0_tau, self.b0_tau
+        tau = np.sum((a0 - 1) * Elt - b0 * Et + a0 * np.log(b0) - gammaln(a0)) + np.sum(
+            a - log_eps(b) + gammaln(a) + (1 - a) * psi(a))
+        elbo = log_p_z + ent_z + delta + gam + tau
+        if self.state.learns and (self.state.per_factor or self.k == 0):
+            elbo += self.state.pi_for(self.k).elbo()
+        return float(elbo)
+
+
+# ---------------------------------------------------------------------------
+# Frozen view pattern + corrected element spike-and-slab
+# ---------------------------------------------------------------------------
+
+from src.w_priors.ARD_SS import ARD_SSWPrior  # noqa: E402  (after the corrected file)
+
+
+class MaskedSSWPrior(ARD_SSWPrior):
+    """Corrected ARD_SS (element spike-and-slab) for one view, with a frozen view
+    pattern: if H[m, k] = 0, every s_dk of that column is fixed at 0, so the
+    whole loading column is an exact zero. Columns with H[m, k] = 1 are ordinary
+    element-wise spike-and-slab columns.
+
+    A fixed s = 0 is a point-mass q; the ELBO terms stay valid (E log p(s=0 | theta)
+    = E log(1 - theta), entropy 0), and coordinate ascent on everything else
+    remains monotone."""
+
+    def __init__(self, mask_row: np.ndarray):
+        self.mask_row = np.asarray(mask_row, dtype=int)
+
+    def create_nodes(self, m, params, starting_params, D, K) -> dict:
+        nodes = super().create_nodes(m, params, starting_params, D, K)
+        s, row = nodes["s_m_node"], self.mask_row
+        off = row == 0
+        s.vi_lambda[:, off] = -50.0
+        s.vi_gamma[:, off] = 0.0
+        original = s.update_k
+
+        def update_k(k, nominator, denominator, E_alpha, E_log_LR_theta):
+            if row[k] == 0:
+                s.v0[k] = 1.0 / E_alpha
+                s.vi_lambda[:, k] = -50.0
+                s.vi_gamma[:, k] = 0.0
+            else:
+                original(k, nominator, denominator, E_alpha, E_log_LR_theta)
+
+        s.update_k = update_k
+        return nodes
+
+
+@dataclass
+class MaskedSSViewConfig(SimpleViewConfig):
+    """SimpleViewConfig for ``MaskedSSWPrior``. ``w_prior`` stays WPrior.ARD_SS so
+    that pretraining initialises the slab means as for ARD_SS."""
+
+    mask_row: np.ndarray | None = None
+
+    def create_w_prior(self):
+        return MaskedSSWPrior(self.mask_row)
