@@ -118,14 +118,14 @@ class FACTM:
     # Update
     # ------------------------------------------------------------------
 
-    def update(self, update_factor: float | None = None):
+    def update(self, update_factor: float | None = None, update_z: bool = True):
         # 1. Update FA (Z and simple-view W nodes)
         indices = (
             np.random.choice(self.N, size=int(update_factor * self.N), replace=False)
             if update_factor
             else None
         )
-        self.fa.update(indices=indices)
+        self.fa.update(indices=indices, update_z=update_z)
 
         # 2. Sync FA → CTM and update each CTM
         for ctm, fa_idx in zip(self.ctms, self._fa_indices, strict=True):

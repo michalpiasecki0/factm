@@ -216,9 +216,9 @@ class FA:
         self.M = views.num_simple  # number of simple views
         self.D = [sv.D for sv in views.simple]
 
-        self.simple_view_configs: List[
-            SimpleViewConfig
-        ] = model_config.simple_view_configs
+        self.simple_view_configs: List[SimpleViewConfig] = (
+            model_config.simple_view_configs
+        )
 
         # Create shared FAParams (used by sub-nodes)
         self.params = FAParams(
@@ -381,8 +381,11 @@ class FA:
 
             self.nodelist_tau[m].MB(self.nodelist_y[m], self.nodelist_w[m], self.node_z)
 
-    def update(self, indices: np.ndarray | None = None):
-        self.node_z.update(indices=indices)
+    def update(self, indices: np.ndarray | None = None, update_z: bool = True):
+        # update_z=False holds Z and the cohort parameters fixed and updates
+        # loadings and noise only.
+        if update_z:
+            self.node_z.update(indices=indices)
 
         # update W
         # and all the nodes defying sparsity
