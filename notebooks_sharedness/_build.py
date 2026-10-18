@@ -572,6 +572,86 @@ for name in DATA:
     return nb
 
 
+def nb04():
+    cells = [md(r"""
+# 04 · Improvements: before vs after
+
+Notebooks 01–03 measured the original pipeline. This notebook applies the improvements suggested in
+`REPORT.md` and re-measures **the same scores** — no new questions.
+
+| arm | what changes |
+|---|---|
+| **before** | single PCA start, ARD, 400 iterations (as in 01–03) |
+| **multistart-pca** | 8 random rotations of the PCA start, keep the best ELBO, run to relative tolerance $10^{-7}$ |
+| **multistart** | the same around a **generalised-CCA** start (shared/private-aware) |
+| **two-stage** | *multistart* → learned view pattern $\hat H_{mk}=\mathbb 1\{a_{mk}\ge 0.1\}$ frozen → refit with the corrected element spike-and-slab → flip borderline cells if the ELBO rises |
+| **switch, calibrated slab** | view switch $h_{mk}$ with a fixed slab whose variance is read off the *multistart* fit |
+
+Cohort prior: **before** = CohortFACTM's $q(\gamma)q(\delta)$ with learned $\pi$; **after** = the scale-free paired prior
+$\delta_{ck}\mid\tau_{ck}\sim\mathcal N(0,(\kappa\tau_{ck})^{-1})$ with $q(\gamma)q(\delta\mid\gamma)$, optionally with a reference cohort.
+Definitions of every component: `sharedness_model.pdf` (repo root of `factm/`).
+"""), code(SETUP + r'''
+from sharedness import improvements as im
+from sharedness.data import load_covid_views, load_four_view_cohort
+SEEDS = range(5)
+''')]
+    cells += [md("## 1 · Synthetic data: factor recovery and pattern recovery"), code(r'''
+syn = im.run_synthetic(seeds=SEEDS)
+syn.to_csv(os.path.join(RESULTS, "improve_synthetic.csv"), index=False)
+order = ["before", "multistart-pca", "multistart", "two-stage", "switch, calibrated slab"]
+cols = ["mean_corr", "min_corr", "min_corr_strong", "auc", "cell_acc", "exact_cols", "leaks", "misses"]
+tab = syn.groupby(["level", "arm"])[cols].mean().reindex(order, level="arm")
+tab
+'''), code(r'''
+fig, axes = plt.subplots(1, 3, figsize=(14, 3.8))
+for ax, col, title in zip(axes, ["mean_corr", "min_corr_strong", "cell_acc"],
+                          ["mean |corr| with true factors", "worst strong factor |corr|",
+                           "pattern cells correct"]):
+    sns.barplot(data=syn, x="arm", y=col, hue="level", order=order, ax=ax, errorbar="sd")
+    ax.set_title(title); ax.set_xlabel(""); ax.tick_params(axis="x", rotation=35)
+    ax.set_ylim(0, 1.02)
+plt.tight_layout(); plt.show()
+''')]
+    cells += [md("## 2 · Cohort π: does the scale-free paired prior remove the bias?"), code(r'''
+coh = im.run_cohort(seeds=range(3))
+coh.to_csv(os.path.join(RESULTS, "improve_cohort.csv"), index=False)
+print("all fits monotone:", bool(coh.monotone.all()))
+coh.groupby(["level", "arm"])[["pi_err", "gamma_auc", "null_gamma", "alt_gamma", "min_corr"]].mean()
+'''), code(r'''
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+for ax, lv in zip(axes, ["easy", "hard"]):
+    for arm, d in coh[coh.level == lv].groupby("arm"):
+        g = d.groupby("rate")[["true_rate", "E_pi"]].mean()
+        ax.plot(g["true_rate"], g["E_pi"], "o-", label=arm)
+    ax.plot([0, 1], [0, 1], "k:", lw=1); ax.set_title(f"{lv}: learned π vs true rate")
+    ax.set_xlabel("true rate"); ax.set_ylabel("E[π]")
+axes[1].legend(fontsize=7); plt.tight_layout(); plt.show()
+''')]
+    cells += [md("## 3 · Real data: seed stability and the final model's view pattern"), code(r'''
+DATA = {"COVID (M=2)": load_covid_views(top=150, cohort_mode="grouped"),
+        "four-view (M=4)": load_four_view_cohort(top=100)}
+K_REAL = {"COVID (M=2)": 5, "four-view (M=4)": 6}
+real, refs = im.run_real(DATA, K_REAL, seeds=range(3), n_starts=4, max_iter=800)
+real.to_csv(os.path.join(RESULTS, "improve_real.csv"), index=False)
+real
+'''), code(r'''
+fig, axes = plt.subplots(1, 2, figsize=(13, 3.8))
+for ax, name in zip(axes, DATA):
+    H = refs[(name, "two-stage")]["H"]
+    sns.heatmap(H, ax=ax, cmap="Blues", cbar=False, annot=True,
+                yticklabels=DATA[name].view_names, xticklabels=[f"f{k}" for k in range(H.shape[1])])
+    ax.set_title(f"{name}: frozen view pattern of the final model (seed 0)")
+plt.tight_layout(); plt.show()
+'''), code(r'''
+rc = im.run_real_cohort(DATA, K_REAL)
+rc.to_csv(os.path.join(RESULTS, "improve_real_cohort.csv"), index=False)
+rc
+''')]
+    nb = nbf.v4.new_notebook(cells=cells)
+    nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3", "language": "python"}
+    return nb
+
+
 if __name__ == "__main__":
     import sys
 
@@ -580,6 +660,7 @@ if __name__ == "__main__":
         "01": (lambda: nb_synthetic("easy", "01", 5), "01_easy_synthetic.ipynb"),
         "02": (lambda: nb_synthetic("hard", "02", 5), "02_harder_synthetic.ipynb"),
         "03": (nb03, "03_real_data.ipynb"),
+        "04": (nb04, "04_improvements.ipynb"),
     }
     for key in sys.argv[1:] or BUILDERS:  # e.g. `_build.py 03` rebuilds only notebook 03
         make, fname = BUILDERS[key]

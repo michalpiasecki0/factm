@@ -592,35 +592,67 @@ from src.w_priors.ARD_SS import ARD_SSWPrior  # noqa: E402  (after the corrected
 
 class MaskedSSWPrior(ARD_SSWPrior):
     """Corrected ARD_SS (element spike-and-slab) for one view, with a frozen view
-    pattern: if H[m, k] = 0, every s_dk of that column is fixed at 0, so the
-    whole loading column is an exact zero. Columns with H[m, k] = 1 are ordinary
-    element-wise spike-and-slab columns.
-
-    A fixed s = 0 is a point-mass q; the ELBO terms stay valid (E log p(s=0 | theta)
-    = E log(1 - theta), entropy 0), and coordinate ascent on everything else
-    remains monotone."""
+    pattern. If H[m, k] = 0 the loading column is identically zero, and the
+    column's element switches s_dk, slab values w_hat_dk, inclusion rate
+    theta_mk and ARD precision alpha_mk are *not part of the masked model*:
+    they do not touch the likelihood, so they are left out of the ELBO
+    (keeping them with s fixed at 0 would cost about -log(D_m + 1) nats per
+    masked cell and bias any comparison between patterns against masking).
+    Columns with H[m, k] = 1 are ordinary element spike-and-slab columns."""
 
     def __init__(self, mask_row: np.ndarray):
         self.mask_row = np.asarray(mask_row, dtype=int)
 
     def create_nodes(self, m, params, starting_params, D, K) -> dict:
+        from scipy.special import digamma as psi, gammaln
+
         nodes = super().create_nodes(m, params, starting_params, D, K)
-        s, row = nodes["s_m_node"], self.mask_row
+        s, th, al, row = nodes["s_m_node"], nodes["theta_m_node"], nodes["alpha_m_node"], self.mask_row
         off = row == 0
         s.vi_lambda[:, off] = -50.0
         s.vi_gamma[:, off] = 0.0
-        original = s.update_k
+        th.vi_a[off], th.vi_b[off] = th.a0, th.b0  # q(theta) = prior: contributes 0
+        th.update_params()
+        s_update, th_update, al_elbo = s.update_k, th.update_k, al.ELBO
 
-        def update_k(k, nominator, denominator, E_alpha, E_log_LR_theta):
+        def s_update_k(k, nominator, denominator, E_alpha, E_log_LR_theta):
             if row[k] == 0:
                 s.v0[k] = 1.0 / E_alpha
                 s.vi_lambda[:, k] = -50.0
                 s.vi_gamma[:, k] = 0.0
             else:
-                original(k, nominator, denominator, E_alpha, E_log_LR_theta)
+                s_update(k, nominator, denominator, E_alpha, E_log_LR_theta)
 
-        s.update_k = update_k
+        def th_update_k(k):
+            if row[k] == 0:
+                th.vi_a[k], th.vi_b[k] = th.a0, th.b0
+                th.update_params()
+            else:
+                th_update(k)
+
+        def al_ELBO():
+            al_elbo()
+            if off.any():  # remove the masked columns' alpha terms
+                a, b = al.vi_a[off], al.vi_b[off]
+                per_k = (-gammaln(al.a0) + al.a0 * np.log(al.b0)
+                         + (al.a0 - 1) * al.E_log_alpha[off] - al.b0 * al.E_alpha[off]
+                         + a + gammaln(a) + (1 - a) * psi(a) - np.log(b))
+                al.elbo -= float(np.sum(per_k))
+
+        s.update_k, th.update_k, al.ELBO = s_update_k, th_update_k, al_ELBO
         return nodes
+
+    def compute_elbo(self, w_node) -> float:
+        elbo = super().compute_elbo(w_node)
+        off = self.mask_row == 0
+        if not off.any():
+            return elbo
+        # super() counted, for each masked column and every d: the spike branch of
+        # w_hat and E log(1 - theta) (g = 0, so the Bernoulli entropy is 0). Remove them.
+        a, v0, th = w_node.alpha_m_node, w_node.s_m_node.v0, w_node.theta_m_node
+        spike = 0.5 * a.E_log_alpha - 0.5 * a.E_alpha * v0 + 0.5 * np.log(v0) + 0.5
+        per_col = spike + th.E_log_1minustheta
+        return float(elbo - w_node.D * np.sum(per_col[off]))
 
 
 @dataclass

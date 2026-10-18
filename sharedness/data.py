@@ -239,3 +239,22 @@ def load_four_view_cohort(
         info=dict(source="raw_data_cohort.csv", n_samples=len(samples),
                   features=kept_counts, dna_min_freq=dna_min_freq, top=top),
     )
+
+
+def center_on_reference(ds: Dataset, reference: str | None = None) -> tuple[Dataset, str]:
+    """Reference coding for the cohort prior: centre every feature on the mean of
+    one reference cohort (default: the largest) instead of the grand mean.
+
+    With global centring, "cohort c differs from the grand mean" is true for
+    almost every cohort as soon as one cohort shifts (the others move by
+    -shift/C). Centring on a reference cohort whose switch is fixed off makes
+    gamma_c mean "cohort c differs from the reference", which is exactly null for
+    an unshifted cohort when the reference is unshifted."""
+    labs, cnt = np.unique(ds.labels, return_counts=True)
+    ref = reference if reference is not None else str(labs[np.argmax(cnt)])
+    sel = ds.labels == ref
+    Ys = [Y - Y[sel].mean(0) for Y in ds.Ys]
+    out = Dataset(views=Views.from_list(Ys, cohorts=ds.labels), Ys=Ys, labels=ds.labels,
+                  view_names=ds.view_names, Z=ds.Z, Ws=ds.Ws, H=ds.H, G=ds.G,
+                  info=dict(ds.info, reference=ref, centred_on="reference"))
+    return out, ref

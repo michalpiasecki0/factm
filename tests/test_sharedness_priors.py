@@ -279,3 +279,22 @@ def test_pipeline_two_stage_runs(ds):
     assert out["H"].shape == (4, 4)
     for m, W in enumerate(out["stage2"].Ws):
         assert np.all(W[:, out["H"][m] == 0] == 0.0)
+
+
+def test_masked_ss_all_ones_equals_ard_ss(ds):
+    """With nothing masked, the masked prior is exactly the corrected ARD_SS."""
+    a = fit_model(ds, K=4, max_iter=30, elbo_tres=-np.inf, seed=0, w="ARD_SS")
+    b = fit_model(ds, K=4, max_iter=30, elbo_tres=-np.inf, seed=0, w="masked_SS",
+                  frozen_mask=np.ones((4, 4), int))
+    assert np.allclose(a.elbo, b.elbo, rtol=0, atol=1e-6)
+
+
+def test_masked_columns_leave_the_elbo(ds):
+    """A masked column contributes nothing besides its effect on the fit: its
+    theta stays at the prior and its alpha/w_hat/s terms are not counted."""
+    f = fit_model(ds, K=4, max_iter=30, elbo_tres=-np.inf, seed=0, w="masked_SS",
+                  frozen_mask=H_EASY)
+    for m in range(4):
+        th = f.model.fa.nodelist_theta[m]
+        off = H_EASY[m] == 0
+        assert np.allclose(th.vi_a[off], th.a0) and np.allclose(th.vi_b[off], th.b0)

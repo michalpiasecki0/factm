@@ -95,7 +95,7 @@ class nodeFA_theta_m:
         kl = (
             np.sum((self.a0 - 1) * self.E_log_theta)
             + np.sum((self.b0 - 1) * self.E_log_1minustheta)
-            - np.sum(betaln(self.a0, self.b0))
+            - len(self.vi_a) * betaln(self.a0, self.b0)  # one Beta prior per factor
         )
         entropy = (
             -np.sum((self.vi_a - 1) * self.E_log_theta)
