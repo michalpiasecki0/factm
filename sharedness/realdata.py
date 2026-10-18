@@ -58,16 +58,18 @@ def run_q1_real(data: dict, K: dict, seeds=range(3)) -> pd.DataFrame:
 
 
 def decide_q1_real(df: pd.DataFrame, name: str) -> tuple[str, str]:
-    d = df[df.dataset == name].groupby("arm")[["E_pi", "frac_gamma_off"]].mean()
-    cur = d.loc["learned pi (current q)"]
-    pai = d.loc["learned pi (paired q)"]
-    txt = (f"current q: E[pi] = {cur.E_pi:.2f}, {cur.frac_gamma_off:.0%} of switches off; "
-           f"paired q: E[pi] = {pai.E_pi:.2f}, {pai.frac_gamma_off:.0%} off.")
-    if cur.E_pi > 0.8 and cur.frac_gamma_off < 0.1 and pai.frac_gamma_off >= 0.2:
-        return "like synthetic O2 → fixed by pairing", txt
-    if cur.E_pi > 0.8 and pai.E_pi > 0.8:
-        return "like synthetic O2, not fixed by pairing", txt
-    return "no drift", txt
+    """Each learned arm is labelled separately: 'drifts to 1' (E[pi] > 0.8 and
+    fewer than 10% of switches off, as in synthetic O2) or 'stays inside (0,1)'."""
+    d = df[df.dataset == name].groupby("arm")[["E_pi", "sd_pi", "frac_gamma_off"]].mean()
+    labels, parts = [], []
+    for arm, short in [("learned pi (current q)", "current q"),
+                       ("learned pi (paired q)", "paired q")]:
+        r = d.loc[arm]
+        drift = r.E_pi > 0.8 and r.frac_gamma_off < 0.1
+        labels.append(f"{short}: {'drifts to 1' if drift else 'stays inside (0,1)'}")
+        parts.append(f"{short}: E[pi] = {r.E_pi:.2f} ± {r.sd_pi:.2f}, "
+                     f"{r.frac_gamma_off:.0%} of switches off")
+    return "; ".join(labels), "; ".join(parts) + "."
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +99,7 @@ def run_q2_real(data: dict, K: dict, seeds=range(3)) -> dict:
             a = mt.activity(mt.variance_share(Z, Ws, ds.Ys))[:, idx]
             corrs.append(float(np.corrcoef(a.ravel(), a0.ravel())[0, 1]))
             cors.append(cor)
-        out[name] = dict(r_ref=r0, S_ref=mt.sharedness_entropy(r0),
+        out[name] = dict(r_ref=r0, S_ref=mt.sharedness_entropy(r0), Z_ref=Z0,
                          stability=float(np.mean(corrs)),
                          match_corr=np.mean(cors, axis=0),
                          monotone=all(m for n, _, _, _, _, m in res if n == name))
@@ -130,31 +132,44 @@ def _switch_job(args):
     return name, seed, mode, f.Z, f.E_h, f.switch.pi_summary(), f.alpha, f.monotone
 
 
-def run_q4_real(data: dict, K: dict, seeds=range(3)) -> dict:
-    res = _pool(_switch_job, [(n, d, K[n], s, "global", "ard") for n, d in data.items()
-                              for s in seeds])
+def run_q4_real(data: dict, K: dict, seeds=range(3), slabs=("ard", "fixed")) -> dict:
+    """Returns out[dataset][slab] (slab "ard": learned alpha; "fixed": alpha = 1/0.25)."""
+    jobs = [(n, d, K[n], s, "global", sl) for n, d in data.items() for s in seeds
+            for sl in slabs]
+    res = _pool(_switch_job, jobs)
+    res = [r + (j[5],) for j, r in zip(jobs, res)]
     out = {}
     for name in data:
-        fits = {s: (Z, Eh, al) for n, s, _, Z, Eh, _, al, _ in res if n == name}
-        Z0, Eh0, al0 = fits[0]
-        call0 = Eh0 > 0.5
-        agree = []
-        for s, (Z, Eh, _) in fits.items():
-            if s == 0:
-                continue
-            idx, _ = _match_to(Z0, Z)
-            agree.append(float(np.mean((Eh[:, idx] > 0.5) == call0)))
-        both = call0.any() and (~call0).any()
-        out[name] = dict(
-            E_h_ref=Eh0, Z_ref=Z0,
-            on_share=float(np.mean(call0)),
-            decisive=mt.decisiveness(Eh0),
-            seed_agreement=float(np.mean(agree)),
-            ard_vs_switch_auc=mt.pattern_auc(mt.activity(1 / al0), call0.astype(int))
-            if both else np.nan,
-            monotone=all(m for n, *_, m in res if n == name),
-        )
+        out[name] = {}
+        for sl in slabs:
+            out[name][sl] = _summarise_switch(
+                {s: (Z, Eh, al) for n, s, _, Z, Eh, _, al, _, slab in res
+                 if n == name and slab == sl},
+                all(m for n, *_, m, slab in res if n == name and slab == sl))
     return out
+
+
+def _summarise_switch(fits: dict, monotone: bool) -> dict:
+    """Reference = seed 0; stability = share of identical on/off calls in other seeds."""
+    Z0, Eh0, al0 = fits[0]
+    call0 = Eh0 > 0.5
+    agree = []
+    for s, (Z, Eh, _) in fits.items():
+        if s == 0:
+            continue
+        idx, _ = _match_to(Z0, Z)
+        agree.append(float(np.mean((Eh[:, idx] > 0.5) == call0)))
+    both = call0.any() and (~call0).any()
+    ard_ok = al0 is not None and np.ptp(al0) > 0
+    return dict(
+        E_h_ref=Eh0, Z_ref=Z0,
+        on_share=float(np.mean(call0)),
+        decisive=mt.decisiveness(Eh0),
+        seed_agreement=float(np.mean(agree)) if agree else np.nan,
+        ard_vs_switch_auc=mt.pattern_auc(mt.activity(1 / al0), call0.astype(int))
+        if (both and ard_ok) else np.nan,
+        monotone=monotone,
+    )
 
 
 def decide_q4_real(res: dict) -> tuple[str, str]:
@@ -185,26 +200,62 @@ def _q5r_job(args):
                 monotone=bool(np.all(np.diff(out["trace"]) > -1e-6 * abs(out["elbo"]))))
 
 
-def run_q5_real(data: dict, K: dict, q4: dict, thetas=(0, 15, 30, 45),
+ACTIVE_THR = 0.1  # a view "uses" a factor if it carries >= 10% of that factor's peak share
+
+
+def run_q5_real(data: dict, K: dict, q2: dict, thetas=(0, 15, 30, 45),
                 frac: float = 0.25) -> pd.DataFrame:
+    """Rotate the most shared factor (max S_k) into the most private one (min S_k)
+    of the seed-0 ARD fit. The frozen arm fixes the pattern
+    mask[m, k] = 1{activity_mk >= ACTIVE_THR} read off that same fit, so it has
+    real zeros (the learned ARD-slab switch never produces any on these data)."""
     jobs = []
     for name, ds in data.items():
-        Z, Eh = q4[name]["Z_ref"], q4[name]["E_h_ref"]
-        mask = (Eh > 0.5).astype(int)
-        n_on = mask.sum(0)
-        shared = int(np.argmax(n_on + 1e-3 * Eh.sum(0)))
-        cand = [k for k in range(Z.shape[1]) if k != shared]
-        private = int(min(cand, key=lambda k: (n_on[k] if n_on[k] > 0 else 99, -Eh[:, k].max())))
+        Z, r, S = q2[name]["Z_ref"], q2[name]["r_ref"], q2[name]["S_ref"]
+        mask = (mt.activity(r) >= ACTIVE_THR).astype(int)
+        S = np.nan_to_num(S, nan=0.0)
+        shared, private = int(np.argmax(S)), int(np.argmin(S))
         pair = (shared, private)
         sub, idx = subsample(ds, frac, seed=0)
         for N_label, d, Zb in [(sub.N, sub, Z[idx] - Z[idx].mean(0)), (ds.N, ds, Z)]:
-            for t in thetas:
+            for t_ in thetas:
                 for a in Q5_ARMS:
-                    jobs.append((name, d, Zb, mask, t, a, N_label, pair))
+                    jobs.append((name, d, Zb, mask, t_, a, N_label, pair))
     df = pd.DataFrame(_pool(_q5r_job, jobs))
+    # On real data the frozen pattern is read off the fit, not known.
+    df["arm"] = df["arm"].replace({"frozen (true pattern)": "frozen (prescribed pattern)"})
     base = df[df.theta == 0].set_index(["dataset", "N", "arm"])["elbo"]
     df["gap"] = [base[(r.dataset, r.N, r.arm)] - r.elbo for r in df.itertuples()]
     return df
+
+
+def q5_real_masks(q2: dict) -> dict:
+    return {n: (mt.activity(v["r_ref"]) >= ACTIVE_THR).astype(int) for n, v in q2.items()}
+
+
+def decide_q5_real(df: pd.DataFrame) -> dict[str, tuple[str, str]]:
+    """Like experiments.decide_q5, but robust to a gap that is ~0 or negative at
+    the small N (a negative gap means the rotated point re-optimised to a better
+    ELBO than the reference, i.e. the reference is not a strict optimum)."""
+    tmax = df.theta.max()
+    d = df[df.theta == tmax].groupby(["arm", "N"])["gap"].mean().unstack()
+    Ns = sorted(d.columns)
+    n_ratio = Ns[-1] / Ns[0]
+    out = {}
+    for arm, row in d.iterrows():
+        g_small, g_big = row[Ns[0]], row[Ns[-1]]
+        if g_big < 5:
+            out[arm] = ("O1", f"FLAT: gap {g_big:.1f} nats at N={Ns[-1]} (theta={tmax}).")
+        elif g_small < 1:
+            out[arm] = ("O3", f"GROWS, RATE UNDEFINED: gap {g_small:.1f} -> {g_big:.0f} nats; "
+                               f"the small-N gap is ~0, so no growth rate can be read.")
+        elif g_big / g_small >= 0.6 * n_ratio:
+            out[arm] = ("O2", f"GROWS LIKE N: gap {g_small:.0f} -> {g_big:.0f} nats "
+                               f"(x{g_big / g_small:.1f} for x{n_ratio:.0f} samples).")
+        else:
+            out[arm] = ("O3", f"GROWS SLOWER THAN N: gap {g_small:.0f} -> {g_big:.0f} nats "
+                               f"(x{g_big / g_small:.1f} for x{n_ratio:.0f} samples).")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +269,8 @@ def run_q6_real(data: dict, K: dict, seeds=range(3)) -> pd.DataFrame:
     calls = {(n, s, m): Eh > 0.5 for n, s, m, _, Eh, *_ in res}
     rows = []
     for n, s, m, Z, Eh, pis, _, mono in res:
-        rows.append(dict(dataset=n, seed=s, mode=m, pi_mean=float(np.mean(pis["mean"])),
+        rows.append(dict(dataset=n, seed=s, mode=m, on_share=float(np.mean(Eh > 0.5)),
+                         pi_mean=float(np.mean(pis["mean"])),
                          pi_sd=float(np.mean(pis["sd"])),
                          agreement_with_global=float(np.mean(calls[(n, s, m)] ==
                                                              calls[(n, s, "global")])),

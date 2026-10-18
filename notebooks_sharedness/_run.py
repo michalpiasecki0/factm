@@ -1,6 +1,9 @@
-"""Execute the sharedness notebooks in place (outputs saved into the files).
+"""Execute the sharedness notebooks in place, saving after every cell.
 
     uv run --with nbformat --with nbclient python notebooks_sharedness/_run.py [00 01 ...]
+
+Because the file is rewritten after each cell, you can open the notebook in
+VS Code while it runs and watch outputs appear (do not edit it meanwhile).
 """
 import sys
 import time
@@ -15,9 +18,24 @@ which = sys.argv[1:] or ["00", "01", "02", "03"]
 for nb_path in sorted(HERE.glob("[0-9][0-9]_*.ipynb")):
     if nb_path.name[:2] not in which:
         continue
-    t = time.time()
+    t0 = time.time()
     nb = nbformat.read(nb_path, as_version=4)
-    NotebookClient(nb, timeout=None, kernel_name="python3",
-                   resources={"metadata": {"path": str(HERE.parent)}}).execute()
+    for c in nb.cells:  # start from a clean notebook so stale outputs never mix in
+        if c.cell_type == "code":
+            c.outputs, c.execution_count = [], None
     nbformat.write(nb, nb_path)
-    print(f"{nb_path.name}: executed in {time.time() - t:.0f} s", flush=True)
+    n_code = sum(c.cell_type == "code" for c in nb.cells)
+    done = 0
+
+    def save(cell, cell_index, execute_reply):
+        global done
+        done += 1
+        nbformat.write(nb, nb_path)
+        print(f"{nb_path.name}: cell {done}/{n_code} done "
+              f"({time.time() - t0:.0f} s)", flush=True)
+
+    NotebookClient(nb, timeout=None, kernel_name="python3",
+                   resources={"metadata": {"path": str(HERE.parent)}},
+                   on_cell_executed=save).execute()
+    nbformat.write(nb, nb_path)
+    print(f"{nb_path.name}: FINISHED in {time.time() - t0:.0f} s", flush=True)

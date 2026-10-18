@@ -520,39 +520,48 @@ The synthetic answer (notebooks 01–02) says whether $M=2$ is enough to *detect
 note that every COVID factor must be one of {shared, metabolomic-only, proteomic-only}.
 """)]
 
-    cells += [question_cell("Q4", short=True), code(r'''
+    cells += [question_cell("Q4", short=True), md(r"""
+Two switches: with an **ARD slab** (as in the synthetic `switch_warm` arm) and with a **fixed slab**
+($\alpha\equiv 1/0.25$; loadings of standardised views are small, so the synthetic value 1 would be too wide).
+"""), code(r'''
 q4r = rd.run_q4_real(DATA, K_REAL, seeds=SEEDS)
-fig, axes = plt.subplots(1, len(DATA), figsize=(13, 3.6))
-for ax, name in zip(axes, DATA):
-    sns.heatmap(q4r[name]["E_h_ref"], ax=ax, cmap="Blues", annot=True, fmt=".2f", vmin=0, vmax=1,
-                yticklabels=DATA[name].view_names)
-    ax.set_title(f"{name}: switch E[h] (warm, seed 0)")
+fig, axes = plt.subplots(2, len(DATA), figsize=(13, 6.6))
+for j, name in enumerate(DATA):
+    for i, slab in enumerate(["ard", "fixed"]):
+        sns.heatmap(q4r[name][slab]["E_h_ref"], ax=axes[i, j], cmap="Blues", annot=True, fmt=".2f",
+                    vmin=0, vmax=1, yticklabels=DATA[name].view_names)
+        axes[i, j].set_title(f"{name}: switch E[h], {slab} slab (seed 0)")
 plt.tight_layout(); plt.show()
-pd.DataFrame({n: {k: v for k, v in q4r[n].items() if not isinstance(v, np.ndarray)} for n in DATA}).T
+pd.DataFrame({(n, sl): {k: v for k, v in q4r[n][sl].items() if not isinstance(v, np.ndarray)}
+              for n in DATA for sl in q4r[n]}).T
 '''), code(r'''
 for name in DATA:
-    outcome(rd.decide_q4_real(q4r[name]), title=f"Observed outcome [{name}]")
+    for slab in q4r[name]:
+        outcome(rd.decide_q4_real(q4r[name][slab]), title=f"Observed outcome [{name} · {slab} slab]")
 ''')]
 
     cells += [question_cell("Q5", short=True), md(r"""
-Real-data version: take the ARD fit's own factors as the reference, pick the most shared and the most
-private factor (by $S_k$), and rotate one into the other. The frozen arm fixes the pattern to the
-thresholded switch pattern of notebook-03 Q4. "Grows with N" is checked on a random subsample of 1/4
-of the samples vs all of them.
+Real-data version: the reference is the seed-0 ARD fit of Q2. Rotate its most shared factor (largest
+$S_k$) into its most private one (smallest $S_k$). The **frozen** arm fixes the pattern
+$\text{mask}_{mk}=\mathbb 1\{a_{mk}\ge 0.1\}$ read off that same fit's variance shares — a prescribed pattern
+with real zeros (the learned ARD-slab switch produces none on these data, see Q4). "Grows with $N$" is checked
+on a random quarter of the samples against all of them.
 """), code(r'''
-q5r = rd.run_q5_real(DATA, K_REAL, q4r)
+q5r = rd.run_q5_real(DATA, K_REAL, q2r)
 q5r.to_csv(os.path.join(RESULTS, "real_q5.csv"), index=False)
+for name, mask in rd.q5_real_masks(q2r).items():
+    print(name, "prescribed pattern (views x factors):\n", mask)
 q5r.groupby(["dataset", "arm", "N", "theta"])["gap"].mean().unstack("theta")
 '''), code(r'''
 for name in DATA:
-    for arm, oc in ex.decide_q5(q5r[q5r.dataset == name]).items():
+    for arm, oc in rd.decide_q5_real(q5r[q5r.dataset == name]).items():
         outcome(oc, title=f"Observed outcome [{name} · {arm}]")
 ''')]
 
     cells += [question_cell("Q6", short=True), code(r'''
 q6r = rd.run_q6_real(DATA, K_REAL, seeds=SEEDS)
 q6r.to_csv(os.path.join(RESULTS, "real_q6.csv"), index=False)
-q6r.groupby(["dataset", "mode"])[["pi_mean", "pi_sd", "agreement_with_global"]].mean()
+q6r.groupby(["dataset", "mode"])[["on_share", "pi_mean", "pi_sd", "agreement_with_global"]].mean()
 '''), code(r'''
 for name in DATA:
     outcome(rd.decide_q6_real(q6r, name), title=f"Observed outcome [{name}]")
@@ -564,8 +573,15 @@ for name in DATA:
 
 
 if __name__ == "__main__":
-    nbf.write(nb00(), HERE / "00_questions_and_data.ipynb")
-    nbf.write(nb_synthetic("easy", "01", 5), HERE / "01_easy_synthetic.ipynb")
-    nbf.write(nb_synthetic("hard", "02", 5), HERE / "02_harder_synthetic.ipynb")
-    nbf.write(nb03(), HERE / "03_real_data.ipynb")
-    print("notebooks written to", HERE)
+    import sys
+
+    BUILDERS = {
+        "00": (nb00, "00_questions_and_data.ipynb"),
+        "01": (lambda: nb_synthetic("easy", "01", 5), "01_easy_synthetic.ipynb"),
+        "02": (lambda: nb_synthetic("hard", "02", 5), "02_harder_synthetic.ipynb"),
+        "03": (nb03, "03_real_data.ipynb"),
+    }
+    for key in sys.argv[1:] or BUILDERS:  # e.g. `_build.py 03` rebuilds only notebook 03
+        make, fname = BUILDERS[key]
+        nbf.write(make(), HERE / fname)
+        print("written", fname)

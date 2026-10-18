@@ -96,7 +96,9 @@ def score_fit(ds, f) -> dict:
     out = dict(n_iter=len(f.elbo), elbo=f.elbo[-1], monotone=f.monotone)
     out["r"] = r
     out["S_fit"] = mt.sharedness_entropy(r)
-    if f.alpha is not None:
+    # A fixed slab pins alpha, so its "ARD activity" carries no information.
+    ard_learned = f.alpha is not None and (f.switch is None or f.switch.slab == "ard")
+    if ard_learned:
         out["ard"] = mt.ard_score(f.alpha)
     if f.E_h is not None:
         out["E_h"] = f.E_h
@@ -106,7 +108,7 @@ def score_fit(ds, f) -> dict:
         out["match_idx"], out["match_corr"] = idx, cor
         out["min_corr"] = float(cor.min())
         out["auc_r"] = mt.pattern_auc(mt.activity(r)[:, idx], ds.H)
-        if f.alpha is not None:
+        if ard_learned:
             out["auc_ard"] = mt.pattern_auc(mt.activity(out["ard"])[:, idx], ds.H)
         if f.E_h is not None:
             Eh = f.E_h[:, idx]
