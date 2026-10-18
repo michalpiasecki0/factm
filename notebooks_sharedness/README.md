@@ -39,4 +39,9 @@ uv run --with nbformat --with nbclient python notebooks_sharedness/_run.py 01   
 ```
 
 Or open a notebook in VS Code with the `factm` kernel and run all cells. Fits run in a process pool
-(`N_WORKERS = cpu_count - 1`). Raw results go to `notebooks_sharedness/results/*.csv`.
+(`N_WORKERS = cpu_count - 1`). Raw results go to `notebooks_sharedness/results/*.csv`; the repo's
+`.gitignore` excludes CSVs, so they exist only locally — every table is also in the executed notebooks.
+
+Approximate run times on this machine (8 cores): 00 — 15 s, 01 — 35 min, 02 — 35 min, 03 — about an hour.
+The `_run.py` runner saves after every cell, so a notebook can be watched in VS Code while it runs (do not
+edit it meanwhile).
