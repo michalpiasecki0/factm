@@ -44,191 +44,282 @@ def code(s):
 
 
 # ---------------------------------------------------------------------------
-# Shared question text. Used verbatim in notebook 00 and repeated, shortened,
-# at the top of each section of notebooks 01-03.
+# Question definitions. Each entry has:
+#   title   - one line
+#   why     - why the thesis cares (1-2 sentences)
+#   setup   - dict level -> exact experimental setup (markdown, written out)
+#   fit     - the models fitted, with their settings
+#   measure - each number defined: formula, range, which direction is good
+#   outcomes- [(code, name, "if we see", "we conclude", "so we")]
+# The same entry is rendered in full in notebook 00 and, shortened, at the top
+# of each section of notebooks 01-04.
 # ---------------------------------------------------------------------------
 
 Q = {}
 
 Q["Q1"] = dict(
     title="Q1 — Can CohortFACTM learn how often cohorts differ?",
-    plain="""CohortFACTM gives every (cohort, factor) pair a switch $\\gamma_{ck}$: *does cohort $c$ have its
-own centre on factor $k$?* Today the switch rate $\\pi$ is a number we pick (0.5). If we let the model
-**learn** $\\pi$, does it find the true rate?""",
-    math=r"""
-$$z_{nk}\mid c \sim \mathcal N(\gamma_{ck}\delta_{ck},\ \tau_{ck}^{-1}),\qquad
-\gamma_{ck}\sim\mathrm{Bern}(\pi),\qquad \pi\sim\mathrm{Beta}(1,1).$$
-Mean-field update: $q(\pi)=\mathrm{Beta}\big(1+\sum_{c,k}\mathbb E[\gamma_{ck}],\ 1+CK-\sum_{c,k}\mathbb E[\gamma_{ck}]\big)$.
-
-**Data:** cohort switches drawn with rate $\pi^\ast\in\{0.1,0.3,0.6\}$ ($C=6$, shift $\pm2$).
-Because the data are centred globally, the switch can only see a cohort's mean *relative to the grand
-mean*; the truth we score against is $G^{\text{eff}}_{ck}=\mathbb 1\{|\bar z_{ck}-\bar z_{\cdot k}|>1\}$.
-
-**Measured:** $\mathbb E[\pi\mid Y]$ against the effective true rate, and the AUC of $\mathbb E[\gamma]$ against $G^{\text{eff}}$.
-
-**Arms:** (i) fixed $\pi=0.5$ (current model); (ii) learned $\pi$ with the current factorisation
-$q(\gamma)q(\delta)$; (iii) learned $\pi$ with the paired factorisation $q(\gamma)q(\delta\mid\gamma)$.""",
+    why="""The cohort switch rate $\\pi$ is fixed at 0.5 in CohortFACTM. If it can be learned, the model
+reports how many cohorts actually have their own mean; if the learned value is biased, we need to know why
+before trusting any cohort read-out.""",
+    setup={
+        "synthetic": r"""
+- **Samples.** $C=6$ cohorts, $n_c=50$ samples each, $N=300$. (This is $C$ larger and $n_c$ smaller than the
+  other questions, because Q1 is about cohorts, not views.)
+- **Factors.** $K$ as in this level. Each true factor score is $z_{nk}=\gamma^\ast_{ck}\delta^\ast_{ck}+\varepsilon$:
+  a cohort either sits at the common centre or is shifted by $\delta^\ast=\pm2$.
+- **The knob.** The true switch rate $\pi^\ast$ — the fraction of $(c,k)$ pairs that are shifted — is set to
+  **0.1, 0.3, 0.6** in turn. These are the numbers the learned $\mathbb E[\pi]$ should recover.
+- **What counts as a real shift.** The data are centred on the grand mean, so a switch can only see a cohort's
+  mean *relative to the grand mean*. The truth we score against is therefore
+  $G^{\text{eff}}_{ck}=\mathbb 1\{|\bar z_{ck}-\bar z_{\cdot k}|>1\}$, not the raw $\gamma^\ast$. $G^{\text{eff}}$ can differ
+  from $\pi^\ast$ (e.g. when one cohort shifts, the others move a little the other way).
+- **Repeats.** 5 seeds per rate.""",
+        "real": r"""
+- **Data.** The real cohorts of each dataset (COVID severity groups; the 6 cancer types of the four-view table).
+- **No truth.** There is no $\pi^\ast$. We therefore ask only whether the learned $\mathbb E[\pi]$ lands clearly
+  inside $(0,1)$ with some switches off (as in the synthetic O1 case) or saturates near 1 (as in O2).
+- **Repeats.** 3 seeds.""",
+    },
+    fit=r"""Three cohort priors, all with ARD loadings:
+1. **$\pi=0.5$ fixed** — CohortFACTM as it is today.
+2. **$\pi$ learned, current factorisation** $q(\gamma)q(\delta)$ — $q(\pi)=\mathrm{Beta}(1+\sum_{c,k}\mathbb E\gamma_{ck},\,1+CK-\sum\mathbb E\gamma_{ck})$.
+3. **$\pi$ learned, paired factorisation** $q(\gamma)q(\delta\mid\gamma)$ — the fix proposed in the model document.""",
+    measure=r"""
+- **$\mathbb E[\pi\mid Y]$** vs the true rate (effective rate on synthetic data). Good = close to the diagonal.
+- **$\gamma$ AUC** $=P(\mathbb E\gamma_{ck}>\mathbb E\gamma_{c'k'}\mid G^{\text{eff}}_{ck}=1,\,G^{\text{eff}}_{c'k'}=0)$: does
+  $\mathbb E\gamma$ rank the real shifts above the non-shifts? $1$ perfect, $0.5$ chance.
+- **null $\mathbb E\gamma$** = mean $\mathbb E\gamma$ where the truth is 0 (should be low); **alt** = where it is 1.""",
     outcomes=[
-        ("O1", "Learnable", r"max $|\mathbb E[\pi]-\pi^\ast| < 0.15$ and slope $>0.5$",
-         "the data carry the rate; keep $\\pi$ learnable"),
-        ("O2", "Drifts to 1", r"$\mathbb E[\pi] > 0.8$ at every $\pi^\ast$",
-         "switches are never pushed off; the factorisation, not the formula, is at fault"),
-        ("O3", "Prior-dominated", r"$\mathbb E[\pi]$ moves $<0.2$ across $\pi^\ast$",
-         "too few switches ($CK$) to learn from; fix $\\pi$"),
-        ("O4", "Partial", "anything else", "moves with the truth but biased; report the bias"),
+        ("O1", "Learnable", r"max $|\mathbb E\pi-\pi^\ast|<0.15$ and $\mathbb E\pi$ rises with $\pi^\ast$ (slope $>0.5$)",
+         "the data carry the rate", "keep $\\pi$ learnable"),
+        ("O2", "Drifts to 1", r"$\mathbb E\pi>0.8$ whatever $\pi^\ast$ is",
+         "switches that should be off are not pushed off", "the factorisation, not the formula, is at fault — try the paired one"),
+        ("O3", "Prior-dominated", r"$\mathbb E\pi$ moves $<0.2$ across all $\pi^\ast$",
+         "too few switches ($CK$) to learn from", "leave $\\pi$ fixed"),
+        ("O4", "Partial", "anything else (moves with the truth but biased)",
+         "the rate is partly recoverable", "report the bias and prefer the arm with the smallest one"),
     ],
 )
 
 Q["Q2"] = dict(
-    title="Q2 — Can a plain fit, with no new parts, already show which factors are shared?",
-    plain="""Fit the model we already have. For each factor, ask each view *how much of you does this factor
-explain?* If the answer is ~0 in some views and large in others, the fit has told us the pattern
-for free.""",
-    math=r"""
-Variance share of factor $k$ in view $m$ (non-negative, unlike `FA.variance_explained_per_factor_view`):
-$$r_{mk}=\frac{\lVert \mathbb E[z_{\cdot k}]\,\mathbb E[w^{(m)}_{\cdot k}]^{\top}\rVert_F^2}{\lVert Y^{(m)}\rVert_F^2},
-\qquad a_{mk}=\frac{r_{mk}}{\max_{m'} r_{m'k}}\in[0,1].$$
-Sharedness of factor $k$: $S_k=-\sum_m p_{mk}\log p_{mk}/\log M$, $p_{mk}=r_{mk}/\sum_{m'}r_{m'k}$
-($1$ = spread over all views, $0$ = one view).
-
-**Measured:** after matching fitted to true factors (Hungarian on $|\mathrm{corr}|$),
-$\mathrm{AUC}(a, H)=P(a_{mk}>a_{m'k'}\mid H_{mk}=1,H_{m'k'}=0)$ — threshold-free, $1$ perfect, $0.5$ chance.
-
-**Arms:** no loadings prior ($w\sim\mathcal N(0,1)$) and ARD.""",
+    title="Q2 — Does a plain fit already show which factors are shared?",
+    why="""If an ordinary fit already reveals the shared/private pattern, no new model is needed to *see* it —
+only (later) to *identify* it. This tells us whether the hard part is reading the pattern or finding the factors.""",
+    setup={
+        "synthetic": r"""
+- **Samples / views / noise / loadings** exactly as this level's data (stated at the top of the notebook: easy
+  = 4 views $\times$ 30 features, $N=300$, noise 0.5, independent loadings; hard = 4 views of 80/40/15/10
+  features, $N=150$, noise 1.2, correlated loadings, one weak factor, 2 surplus fitted factors).
+- **True pattern $H$** (views $\times$ factors) is the matrix drawn at the top of notebook 00. We know it, so we
+  can score recovery.""",
+        "real": None,
+    },
+    fit=r"""Two loadings priors: **no prior** ($w\sim\mathcal N(0,1)$) and **ARD**. No cohort structure.""",
+    measure=r"""
+- **Variance share** $r_{mk}=\lVert\mathbb E z_{\cdot k}\,\mathbb E w^{(m)\top}_{\cdot k}\rVert_F^2/\lVert Y^{(m)}\rVert_F^2$:
+  the fraction of view $m$'s variance carried by factor $k$. Normalise per factor to activity $a_{mk}\in[0,1]$.
+- **Pattern AUC** $=P(a_{mk}>a_{m'k'}\mid H_{mk}=1,\,H_{m'k'}=0)$, after matching fitted to true factors
+  (Hungarian on $|\mathrm{corr}|$). Threshold-free; $1$ perfect, $0.5$ chance. We report it with and without ARD.""",
     outcomes=[
-        ("O1", "Yes, any fit", "AUC $\\ge 0.95$ with and without ARD",
-         "sharedness is a read-out; no new model needed to *see* it"),
-        ("O2", "Yes, with ARD", "AUC $\\ge 0.95$ only with ARD",
-         "ARD is what makes it readable"),
-        ("O3", "Partly", "best AUC in $[0.75, 0.95)$", "some cells wrong; inspect leaks"),
-        ("O4", "No", "best AUC $<0.75$", "the fit does not expose the pattern"),
+        ("O1", "Yes, any fit", r"AUC $\ge0.95$ with and without ARD",
+         "sharedness is a read-out of the fit", "no new model needed to see the pattern"),
+        ("O2", "Yes, with ARD", r"AUC $\ge0.95$ only with ARD",
+         "ARD is what makes the pattern readable", "use ARD loadings when reading sharedness"),
+        ("O3", "Partly", r"best AUC in $[0.75,0.95)$",
+         "some cells are read wrongly", "inspect leaks (private read as shared) vs misses"),
+        ("O4", "No", r"best AUC $<0.75$",
+         "the fit does not expose the pattern", "the bottleneck is elsewhere (see Q2b)"),
     ],
 )
 
 Q["Q2b"] = dict(
-    title="Q2b — When the fit misses the true factors, is it the optimiser or the model?",
-    plain="""Reading the pattern needs the right factors first. If a fit lands on a *rotated* set of factors,
-there are two very different explanations: the model would prefer the truth but the algorithm never
-gets there (an **optimiser** problem — fixable), or the model's own objective prefers the rotated
-answer (a **model / identification** problem — needs theory).""",
-    math=r"""
-For every seed where the ARD fit from the usual PCA start has $\min_k|\mathrm{corr}(\hat z_k,z^\ast_k)|<0.9$,
-refit starting **at the truth** $(Z^\ast,W^\ast)$ and compare
-$$\Delta_{\text{start}}=\mathrm{ELBO}_{\text{truth start}}-\mathrm{ELBO}_{\text{PCA start}}.$$""",
+    title="Q2b — When the fit lands on the wrong factors, is it the optimiser or the model?",
+    why="""If the model's objective (ELBO) *prefers* the true factors but the algorithm fails to reach them, the
+fix is better optimisation (cheap). If the ELBO itself prefers a rotated answer, the fix is new theory (hard).
+Everything downstream depends on which it is.""",
+    setup={
+        "synthetic": r"""
+- **Same data as Q2.** Look only at seeds where the ordinary ARD fit (from the usual PCA start) missed the true
+  factors: $\min_k|\mathrm{corr}(\hat z_k,z^\ast_k)|<0.9$.
+- For each such seed, **refit a second time starting exactly at the truth** $(Z^\ast,W^\ast)$, and compare the two
+  fits' final ELBO.""",
+        "real": None,
+    },
+    fit=r"""ARD loadings from two starts: the usual PCA start, and the true $(Z^\ast,W^\ast)$.""",
+    measure=r"""
+- **$\Delta_{\text{start}}=\mathrm{ELBO}_{\text{truth start}}-\mathrm{ELBO}_{\text{PCA start}}$** (nats). Positive means the
+  model scores the truth higher than the rotated answer it actually found.
+- Whether the truth-started fit **keeps** the true axes (does not drift back to the rotated answer).""",
     outcomes=[
-        ("O0", "Not needed", "every fit found the true axes", "skip"),
+        ("O0", "Not needed", "every ARD fit already found the true axes", "no problem to diagnose", "move on"),
         ("O1", "Optimiser", r"$\Delta_{\text{start}}>10$ nats and the truth start keeps the true axes",
-         "better initialisation or annealing would fix it"),
-        ("O2", "Model", r"$\Delta_{\text{start}}<-10$ or the truth start drifts away",
-         "the ELBO prefers a rotation: an identification result to prove (Lemma C regime)"),
-        ("O3", "Flat", r"$|\Delta_{\text{start}}|\le10$", "the rotation is (nearly) unidentified"),
+         "the ELBO prefers the truth; the algorithm just doesn't reach it", "better initialisation / multi-start fixes it"),
+        ("O2", "Model", r"$\Delta_{\text{start}}<-10$, or the truth start drifts away",
+         "the ELBO itself prefers a rotation", "an identification result is needed (mean-field artefact regime)"),
+        ("O3", "Flat", r"$|\Delta_{\text{start}}|\le10$",
+         "the two solutions are indistinguishable to the ELBO", "the rotation is (nearly) unidentified"),
     ],
 )
 
 Q["Q3"] = dict(
-    title="Q3 — How many views do we need before ‘shared vs private’ is a meaningful question?",
-    plain="""With 2 views there are only 3 patterns: shared, private to view 1, private to view 2. With 4 views
-there are 15. Does having few views make the pattern harder to *detect*, or just coarser?""",
-    math=r"""
-Number of non-empty patterns: $2^M-1$. A per-factor rate learned from $M$ switches has posterior
-$\mathrm{Beta}(1+s_k,\,1+M-s_k)$ with $s_k=\sum_m h_{mk}$ — so even a *perfectly* observed pattern
-leaves $\mathrm{sd}(\pi_k)$ large when $M$ is small (table below, no fitting needed).
-
-**Data:** one shared factor, one factor in views 1–2 (if $M>2$), one private factor per view;
-$M\in\{2,3,4,6\}$. **Measured:** AUC of ARD activity against $H$.""",
+    title="Q3 — How many views are needed before shared-vs-private is a meaningful question?",
+    why="""With 2 views there are only 3 possible patterns; with 4 there are 15. We need to know whether few
+views make the pattern merely *coarse* or actually *hard to detect* — this decides whether COVID ($M=2$) is a
+usable test bed.""",
+    setup={
+        "synthetic": r"""
+- **A ladder of view counts** $M\in\{2,3,4,6\}$. For each $M$ the true pattern has one fully shared factor, one
+  factor in views 1–2 (when $M>2$), and one factor private to each view.
+- Feature counts per view: 30 (easy) or spread 80…10 (hard); other settings as this level.
+- **Repeats.** 5 seeds per $M$.
+- Plus a **no-fitting table**: the posterior sd of a per-factor rate learned from only $M$ switches,
+  $\mathrm{Beta}(1+s_k,1+M-s_k)$ — shows how uncertain $\pi_k$ must be when $M$ is small, before any experiment.""",
+        "real": r"""No fitting: the datasets are fixed. We only note the pattern count ($2^M-1$ = 3 for COVID, 15 for
+the four-view table) and recall the synthetic answer for whether $M=2$ suffices to detect a pattern.""",
+    },
+    fit=r"""ARD loadings, no cohort structure, one fit per $(M,\text{seed})$.""",
+    measure=r"""**AUC of ARD activity against $H$** (as in Q2), averaged over seeds, for each $M$. Good = high and
+flat across $M$; a rise with $M$ means more views help detection.""",
     outcomes=[
-        ("O1", "M does not limit detection", "AUC $\\ge0.95$ at every $M$",
-         "M=2 data (COVID) can answer the question, just coarsely"),
-        ("O2", "More views help", "AUC rises by $\\ge0.05$ from smallest to largest $M$",
-         "prefer data with more views"),
-        ("O3", "More views hurt", "AUC falls by $\\ge0.05$",
-         "more private factors split the signal"),
-        ("O4", "Flat but imperfect", "otherwise", "detection limited by something other than $M$"),
+        ("O1", "M does not limit detection", r"AUC $\ge0.95$ at every $M$",
+         "even $M=2$ detects the pattern, just coarsely", "COVID is usable; more views only add resolution"),
+        ("O2", "More views help", r"AUC rises by $\ge0.05$ from the smallest to the largest $M$",
+         "detection improves with views", "prefer the four-view data over COVID"),
+        ("O3", "More views hurt", r"AUC falls by $\ge0.05$",
+         "more private factors split the signal", "cap the number of views / factors"),
+        ("O4", "Flat but imperfect", "otherwise",
+         "detection is limited by something other than $M$", "look at noise / factor strength instead"),
     ],
 )
 
 Q["Q4"] = dict(
-    title="Q4 — Does an explicit on/off switch per view give a cleaner answer than ARD’s dials?",
-    plain="""ARD turns a factor's loadings in a view *down* but never fully *off*. The view-axis twin of
-CohortFACTM's $\\gamma$ is a real switch $h_{mk}$: is factor $k$ used by view $m$, yes or no?
-Does that switch give sharper, correct answers?""",
-    math=r"""
-$$W^{(m)}_{\cdot k}=h_{mk}V^{(m)}_{\cdot k},\quad h_{mk}\sim\mathrm{Bern}(\pi),\quad
-V^{(m)}_{dk}\sim\mathcal N(0,\alpha_{mk}^{-1}),\quad q(h,V)=q(h)\,q(V\mid h).$$
-$$\operatorname{logit}\mathbb E[h_{mk}]=\mathbb E\log\pi-\mathbb E\log(1-\pi)+\sum_{d}\Big[\tfrac12\log\tfrac{\mathbb E[\alpha_{mk}]}{\Lambda_d}+\tfrac{\nu_d^2}{2\Lambda_d}\Big],
-\quad \Lambda_d=\textstyle\sum_n\mathbb E[z_{nk}^2]\,\mathbb E[\tau_d]+\mathbb E[\alpha_{mk}].$$
-**Measured:** AUC of $\mathbb E[h]$ against $H$; *decisiveness* = share of $\mathbb E[h_{mk}]\notin(0.1,0.9)$;
-leaks (private called shared) and misses.
-
-**Arms:** ARD (reference); switch started cold; switch started from a converged ARD fit ("warm");
-warm switch with a fixed slab variance ($\alpha\equiv1$) instead of ARD.""",
+    title="Q4 — Does an explicit on/off view switch beat ARD's soft dials?",
+    why="""ARD turns a factor's loadings in a view *down* but never fully *off*, so any yes/no call needs an
+arbitrary cutoff. A real switch $h_{mk}$ would give a direct answer — if it is identifiable.""",
+    setup={
+        "synthetic": r"""
+- **Same data as Q2** (this level). We know $H$, so we can check the switch's calls.
+- The switch is $w^{(m)}_{\cdot k}=h_{mk}V^{(m)}_{\cdot k}$, $h_{mk}\sim\mathrm{Bern}(\pi)$, one Bernoulli per (view, factor).""",
+        "real": r"""Each dataset, 3 seeds. No truth: we report how many switches stay on and whether seeds agree,
+and we compare the ARD slab against a fixed slab.""",
+    },
+    fit=r"""Four arms: **ARD** (reference, no switch); **switch, cold start**; **switch, warm start** (started from a
+converged ARD fit); **switch, warm start + fixed slab** (slab precision $\alpha\equiv1$ instead of learned ARD).""",
+    measure=r"""
+- **Switch AUC** of $\mathbb E[h]$ against $H$ (as in Q2).
+- **Decisiveness** = share of $\mathbb E[h_{mk}]$ outside $(0.1,0.9)$ — are the calls confident?
+- **Switches on** = share with $\mathbb E[h]>0.5$ (true value 50% in the synthetic pattern).
+- **Leaks** (private called shared) and **misses** (shared called absent).""",
     outcomes=[
-        ("O1", "Cleaner", "best switch AUC $\\ge$ ARD$-0.02$, $\\ge0.9$, decisive $\\ge90\\%$",
-         "the switch is worth adding as a diagnostic"),
-        ("O2", "Switch stays on", "$\\ge95\\%$ of switches on in the best arm",
-         "$h$ is not identifiable next to $\\alpha$; drop the switch or change the slab"),
-        ("O3", "Worse than ARD", "best switch AUC $<$ ARD$-0.05$", "the switch harms recovery"),
-        ("O4", "Mixed", "otherwise", "report per arm"),
+        ("O1", "Cleaner", r"best switch AUC $\ge$ ARD$-0.02$, $\ge0.9$, and $\ge90\%$ decisive",
+         "the switch gives sharper correct calls", "worth adding as a diagnostic"),
+        ("O2", "Switch stays on", r"$\ge95\%$ of switches on in the best arm",
+         "$h$ cannot tell itself apart from a shrunk slab ($\\alpha\\to\\infty$ and $h=0$ look the same)",
+         "drop the switch or use a fixed slab"),
+        ("O3", "Worse than ARD", r"best switch AUC $<$ ARD$-0.05$",
+         "the switch harms recovery", "keep ARD"),
+        ("O4", "Mixed", "otherwise", "it depends on the slab", "report per arm"),
     ],
 )
 
 Q["Q5"] = dict(
     title="Q5 — Do forced zeros pin the factors down better than learned zeros?",
-    plain="""Mix a shared factor into a private one by rotating them. A *forced* zero (‘factor 2 never appears in
-view 1’) should make that rotation impossible. A *learned* zero can simply be switched back on.
-How much does the model resist the rotation in each case, and does the resistance grow with the
-number of samples?""",
-    math=r"""
-Fix the factor means at $\bar Z(\theta)=Z^\ast G(\theta)$, where $G(\theta)$ rotates a fully shared and a
-view-private factor, and re-optimise **everything else**. With $z\sim\mathcal N(0,I)$ the factor-prior
-part of the ELBO is unchanged by the rotation, so the gap
-$$\Delta(\theta)=\mathrm{ELBO}(0)-\mathrm{ELBO}(\theta)$$
-comes from the loadings side only. Likelihood-level identification means $\Delta=\Theta(N)$;
-a prior-level preference means $\Delta=O(1)$ in $N$. We compare $N=150$ and $N=600$ ($\times4$).
-
-**Arms:** ARD (no switch); learned switch; frozen switch fixed at the true pattern.""",
+    why="""This is the headline. A *frozen* zero (‘factor 2 never appears in view 1’) should make a
+shared↔private rotation impossible; a *learned* zero can be switched back on. If the frozen penalty grows with
+$N$ and the learned one does not, only a prescribed pattern identifies the split.""",
+    setup={
+        "synthetic": r"""
+- **The rotation.** Pick the fully shared factor and one view-private factor. Rotate one into the other by an
+  angle $\theta\in\{0,10,20,30,45\}^\circ$: set the factor means to $Z^\ast G(\theta)$.
+- **Freeze those means** and re-optimise *everything else* (loadings, switches, noise, cohort parameters).
+- **Two sample sizes.** $N=150$ ($n_c=50$) and $N=600$ ($n_c=200$) — a $\times4$ increase, to see whether the
+  penalty scales with $N$. With $z\sim\mathcal N(0,I)$ the factor-prior part of the ELBO is unchanged by the
+  rotation, so any gap comes from the loadings side.
+- **Repeats.** 2 seeds (the signal is large).""",
+        "real": r"""Same idea, but the reference factors are the ARD fit's own (no truth): rotate its most shared
+factor into its most private one. The frozen arm fixes the pattern read off that fit. "Grows with $N$" is checked
+on a random quarter of the samples vs all of them.""",
+    },
+    fit=r"""Three arms, each re-optimised at every angle: **ARD** (no view structure); **learned switch**;
+**frozen pattern** (the true $H$ on synthetic data; the read-off pattern on real data).""",
+    measure=r"""**$\Delta(\theta)=\mathrm{ELBO}(0)-\mathrm{ELBO}(\theta)$** (nats): how hard the model resists the rotation.
+We read its **growth from $N$ to $4N$**: a ratio near $4$ means the penalty scales with $N$ (likelihood-level
+identification); a ratio near $1$ means a fixed, prior-level preference.""",
     outcomes=[
-        ("O1", "Flat", "$\\Delta < 5$ nats at the larger $N$", "rotation is essentially free"),
-        ("O2", "Grows like N", "gap ratio $\\ge 0.6\\times$ the sample ratio",
-         "pinned at likelihood level (`lem:zeros` regime)"),
-        ("O3", "Grows slower than N", "otherwise", "a real penalty, but not identification"),
+        ("O1", "Flat", r"$\Delta<5$ nats at the larger $N$",
+         "rotating shared into private is essentially free", "no identification from this mechanism"),
+        ("O2", "Grows like N", r"gap ratio $\ge0.6\times$ the sample-size ratio",
+         "the split is pinned at the likelihood level", "a prescribed pattern identifies it (the `lem:zeros` regime)"),
+        ("O3", "Grows slower than N", "otherwise",
+         "there is a real penalty but it does not scale with $N$", "a preference, not identification"),
     ],
 )
 
 Q["Q6"] = dict(
     title="Q6 — One sharing rate for the whole model, or one per factor?",
-    plain="""A single $\\pi$ says ‘in this dataset, factors are mostly shared (or mostly private)’. A rate $\\pi_k$
-per factor says ‘factor $k$ is shared’. But $\\pi_k$ is learned from only $M$ switches. Is it worth it?""",
-    math=r"""
-Global: $q(\pi)=\mathrm{Beta}(1+\sum_{m,k}\mathbb E h_{mk},\,1+MK-\sum\mathbb E h_{mk})$.
-Per factor: $q(\pi_k)=\mathrm{Beta}(1+\sum_m\mathbb E h_{mk},\,1+M-\sum_m\mathbb E h_{mk})$.
-
-**Measured:** AUC of $\mathbb E[h]$ (both modes); $\mathrm{sd}(\pi_k)$; separation
-$\overline{\mathbb E[\pi_k]}_{\text{shared}}-\overline{\mathbb E[\pi_k]}_{\text{private}}$. $M\in\{2,4,8\}$.""",
+    why="""A single $\\pi$ answers ‘are this dataset's factors mostly shared?’; a per-factor $\\pi_k$ answers ‘is
+factor $k$ shared?’ — but $\\pi_k$ is learned from only $M$ switches. We need to know if the finer version is worth
+the extra uncertainty.""",
+    setup={
+        "synthetic": r"""
+- **View counts** $M\in\{2,4,8\}$, same pattern family as Q3, this level's settings.
+- Fit the view switch twice: with **one global $\pi$** and with **one $\pi_k$ per factor**.
+- **Repeats.** 5 seeds per $M$.""",
+        "real": r"""Each dataset, 3 seeds: compare the two modes' switch calls and the spread of $\pi_k$.""",
+    },
+    fit=r"""View switch (fixed slab), global $q(\pi)=\mathrm{Beta}(1+\sum_{m,k}\mathbb E h_{mk},\,1+MK-\sum\mathbb E h_{mk})$
+vs per-factor $q(\pi_k)=\mathrm{Beta}(1+\sum_m\mathbb E h_{mk},\,1+M-\sum_m\mathbb E h_{mk})$.""",
+    measure=r"""
+- **Switch AUC** in both modes (does per-factor recover the pattern any better?).
+- **$\mathrm{sd}(\pi_k)$** — how uncertain the per-factor rate is (large when $M$ is small).
+- **Separation** = mean $\mathbb E[\pi_k]$ over shared factors minus over private factors.""",
     outcomes=[
-        ("O1", "Either works", "sd$(\\pi_k)<0.15$ at $M\\le4$, no AUC gain",
-         "choose by interpretability"),
-        ("O2", "Use one global $\\pi$", "sd$(\\pi_k)\\ge0.15$ at $M\\le4$, no AUC gain",
-         "per-factor rates are noise at realistic $M$"),
-        ("O3", "Per-factor helps", "AUC gain $\\ge0.03$ at some $M$", "keep $\\pi_k$ where it helps"),
+        ("O1", "Either works", r"$\mathrm{sd}(\pi_k)<0.15$ at $M\le4$ and no AUC gain",
+         "per-factor is certain enough and costs nothing", "choose by interpretability"),
+        ("O2", "Use one global $\\pi$", r"$\mathrm{sd}(\pi_k)\ge0.15$ at $M\le4$ and no AUC gain",
+         "per-factor rates are noise at realistic $M$", "use a single $\\pi$"),
+        ("O3", "Per-factor helps", r"switch AUC gain $\ge0.03$ at some $M$",
+         "the finer rate improves recovery there", "keep $\\pi_k$ where it helps"),
     ],
 )
 
 
 def outcomes_table(q):
-    rows = ["| Outcome | Name | What we would see | What it would mean |", "|---|---|---|---|"]
-    rows += [f"| **{c}** | {n} | {see} | {mean} |" for c, n, see, mean in q["outcomes"]]
+    rows = ["| Outcome | If we see | It would mean | So we |", "|---|---|---|---|"]
+    for c, name, see, means, do in q["outcomes"]:
+        rows.append(f"| **{c}** {name} | {see} | {means} | {do} |")
     return "\n".join(rows)
 
 
-def question_cell(key, short=False):
+def _setup_for(q, level):
+    """The level-specific setup block: 'synthetic' for 01/02/04, 'real' for 03."""
+    s = q.get("setup", {})
+    if level in ("easy", "hard", "synthetic"):
+        return s.get("synthetic")
+    return s.get("real", s.get("synthetic"))
+
+
+def question_cell(key, short=False, level="synthetic"):
     q = Q[key]
+    setup = _setup_for(q, level)
+    def labelled(label, body):
+        body = body.strip("\n")
+        sep = "\n\n" if body.lstrip().startswith(("-", "1.", "$$")) else " "
+        return f"**{label}**{sep}{body}"
+
+    parts = [f"## {q['title']}", labelled("Why we ask.", q["why"])]
+    if setup:
+        parts.append(labelled("Setup.", setup))
+    if q.get("fit"):
+        parts.append(labelled("What we fit.", q["fit"]))
+    if q.get("measure"):
+        parts.append(labelled("What we measure.", q["measure"]))
+    parts.append("**How to read the answer** (the rule the code applies, fixed before the run):\n\n"
+                 + outcomes_table(q))
     if short:
-        return md(f"## {q['title']}\n\n{q['plain']}\n\n{outcomes_table(q)}\n\n"
-                  f"*Full mathematical statement: notebook 00.*")
-    return md(f"## {q['title']}\n\n**In plain words.** {q['plain']}\n\n**Precisely.**{q['math']}\n\n"
-              f"**Possible outcomes (fixed before running; thresholds live in "
-              f"`sharedness/experiments.py`).**\n\n{outcomes_table(q)}")
+        parts.append("*Thresholds live in `sharedness/experiments.py`; the full statement is in notebook 00.*")
+    return md("\n\n".join(parts))
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +429,7 @@ All raw results are saved to `notebooks_sharedness/results/{level}_*.csv`.
 """), code(SETUP + f'\nLEVEL = "{level}"\nSEEDS = range({seeds})\n')]
 
     # Q1
-    cells += [question_cell("Q1", short=True), code(r'''
+    cells += [question_cell("Q1", short=True, level=level), code(r'''
 q1 = ex.run_q1(LEVEL, seeds=SEEDS)
 q1.to_csv(os.path.join(RESULTS, f"{LEVEL}_q1.csv"), index=False)
 summary = (q1.groupby(["arm", "rate"])
@@ -363,7 +454,7 @@ for arm in ["learned pi (current q)", "learned pi (paired q)"]:
 ''')]
 
     # Q2
-    cells += [question_cell("Q2", short=True), code(r'''
+    cells += [question_cell("Q2", short=True, level=level), code(r'''
 q2 = ex.run_q2(LEVEL, seeds=SEEDS)
 q2[["arm", "seed", "auc_r", "auc_ard", "leak_r", "miss_r", "exact_r", "min_corr", "surplus_share",
     "monotone", "n_iter"]].to_csv(os.path.join(RESULTS, f"{LEVEL}_q2.csv"), index=False)
@@ -384,7 +475,7 @@ axes[2].set_title("sharedness S_k (1 = all views)"); axes[2].set_xlabel("factor"
 plt.tight_layout(); plt.show()
 '''), code("outcome(ex.decide_q2(q2))")]
 
-    cells += [question_cell("Q2b", short=True), code(r'''
+    cells += [question_cell("Q2b", short=True, level=level), code(r'''
 piv = q2[q2.arm.isin(["ARD", "ARD_truthstart"])].pivot(index="seed", columns="arm",
                                                        values=["elbo", "min_corr"])
 piv[("elbo", "truth − PCA start")] = piv[("elbo", "ARD_truthstart")] - piv[("elbo", "ARD")]
@@ -392,7 +483,7 @@ piv
 '''), code("outcome(ex.decide_q2b(q2))")]
 
     # Q3
-    cells += [question_cell("Q3", short=True), code(r'''
+    cells += [question_cell("Q3", short=True, level=level), code(r'''
 q3 = ex.run_q3(LEVEL, seeds=SEEDS)
 q3[["M", "seed", "auc_ard", "auc_r", "exact_r", "min_corr"]].to_csv(
     os.path.join(RESULTS, f"{LEVEL}_q3.csv"), index=False)
@@ -400,7 +491,7 @@ q3.groupby("M")[["auc_ard", "auc_r", "exact_r", "min_corr"]].mean()
 '''), code("outcome(ex.decide_q3(q3))")]
 
     # Q4
-    cells += [question_cell("Q4", short=True), code(r'''
+    cells += [question_cell("Q4", short=True, level=level), code(r'''
 q4 = ex.run_q4(LEVEL, seeds=SEEDS)
 q4["on_share"] = q4["E_h"].map(lambda x: np.nan if not isinstance(x, np.ndarray) else float(np.mean(x > .5)))
 q4["pi_mean"] = q4["pi"].map(lambda x: np.nan if not isinstance(x, dict) else x["mean"][0])
@@ -422,7 +513,7 @@ plt.tight_layout(); plt.show()
 '''), code("outcome(ex.decide_q4(q4))")]
 
     # Q5
-    cells += [question_cell("Q5", short=True), code(r'''
+    cells += [question_cell("Q5", short=True, level=level), code(r'''
 q5 = ex.run_q5(LEVEL, seeds=range(2))
 q5.to_csv(os.path.join(RESULTS, f"{LEVEL}_q5.csv"), index=False)
 print("all freeze fits monotone:", bool(q5.monotone.all()))
@@ -442,7 +533,7 @@ for arm, oc in ex.decide_q5(q5).items():
 ''')]
 
     # Q6
-    cells += [question_cell("Q6", short=True), code(r'''
+    cells += [question_cell("Q6", short=True, level=level), code(r'''
 q6 = ex.run_q6(LEVEL, seeds=SEEDS)
 q6.to_csv(os.path.join(RESULTS, f"{LEVEL}_q6.csv"), index=False)
 q6.groupby(["M", "mode"])[["auc_h", "decisive_h", "pi_sd", "pi_sep", "min_corr"]].mean()
@@ -485,7 +576,7 @@ K_REAL = {"COVID (M=2)": 5, "four-view (M=4)": 6}
 SEEDS = range(3)
 ''')]
 
-    cells += [question_cell("Q1", short=True), md("""
+    cells += [question_cell("Q1", short=True, level="real"), md("""
 On real data we cannot score $\\mathbb E[\\pi]$ against a truth. We ask instead: does the learned $\\pi$
 behave like the synthetic O1 case (a rate clearly inside $(0,1)$, with some switches clearly off) or like
 O2 (everything on)?
@@ -498,7 +589,7 @@ for name in DATA:
     outcome(rd.decide_q1_real(q1r, name), title=f"Observed outcome [{name}]")
 ''')]
 
-    cells += [question_cell("Q2", short=True), code(r'''
+    cells += [question_cell("Q2", short=True, level="real"), code(r'''
 q2r = rd.run_q2_real(DATA, K_REAL, seeds=SEEDS)
 fig, axes = plt.subplots(1, len(DATA), figsize=(13, 3.6))
 for ax, name in zip(axes, DATA):
@@ -514,13 +605,13 @@ for name in DATA:
     outcome(rd.decide_q2_real(q2r[name]), title=f"Observed outcome [{name}]")
 ''')]
 
-    cells += [question_cell("Q3", short=True), md("""
+    cells += [question_cell("Q3", short=True, level="real"), md("""
 Q3 on real data is the inventory itself: COVID has $2^2-1=3$ possible patterns, the four-view table $15$.
 The synthetic answer (notebooks 01–02) says whether $M=2$ is enough to *detect* the pattern; here we only
 note that every COVID factor must be one of {shared, metabolomic-only, proteomic-only}.
 """)]
 
-    cells += [question_cell("Q4", short=True), md(r"""
+    cells += [question_cell("Q4", short=True, level="real"), md(r"""
 Two switches: with an **ARD slab** (as in the synthetic `switch_warm` arm) and with a **fixed slab**
 ($\alpha\equiv 1/0.25$; loadings of standardised views are small, so the synthetic value 1 would be too wide).
 """), code(r'''
@@ -540,7 +631,7 @@ for name in DATA:
         outcome(rd.decide_q4_real(q4r[name][slab]), title=f"Observed outcome [{name} · {slab} slab]")
 ''')]
 
-    cells += [question_cell("Q5", short=True), md(r"""
+    cells += [question_cell("Q5", short=True, level="real"), md(r"""
 Real-data version: the reference is the seed-0 ARD fit of Q2. Rotate its most shared factor (largest
 $S_k$) into its most private one (smallest $S_k$). The **frozen** arm fixes the pattern
 $\text{mask}_{mk}=\mathbb 1\{a_{mk}\ge 0.1\}$ read off that same fit's variance shares — a prescribed pattern
@@ -558,7 +649,7 @@ for name in DATA:
         outcome(oc, title=f"Observed outcome [{name} · {arm}]")
 ''')]
 
-    cells += [question_cell("Q6", short=True), code(r'''
+    cells += [question_cell("Q6", short=True, level="real"), code(r'''
 q6r = rd.run_q6_real(DATA, K_REAL, seeds=SEEDS)
 q6r.to_csv(os.path.join(RESULTS, "real_q6.csv"), index=False)
 q6r.groupby(["dataset", "mode"])[["on_share", "pi_mean", "pi_sd", "agreement_with_global"]].mean()

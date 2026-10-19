@@ -112,7 +112,7 @@ $\psi$, $\sigma(u)=1/(1+e^{-u})$, $\langle\cdot\rangle$ & digamma, logistic, exp
 \subsection{Generative model}
 \begin{align}
 y^{(m)}_{nd}\mid z,w,\tau &\sim \N\Big(\textstyle\sum_{k} w^{(m)}_{dk}z_{nk},\ \tau_{md}^{-1}\Big), &\tau_{md}&\sim\Gam(a_0,b_0),\label{eq:lik}\\
-w^{(m)}_{dk} &= \new{H_{mk}}\, s^{(m)}_{dk}\,\wh^{(m)}_{dk}, &\new{H}&\ \new{\text{fixed in stage 2, chosen in stage 1}},\label{eq:w}\\
+w^{(m)}_{dk} &= \new{H_{mk}}\, s^{(m)}_{dk}\,\wh^{(m)}_{dk}, &\new{H}&\ \new{\text{fixed constant, chosen between fits (Rem.~\ref{rem:H})}},\label{eq:w}\\
 \wh^{(m)}_{dk}\mid\alpha_{mk}&\sim\N(0,\alpha_{mk}^{-1}), &\alpha_{mk}&\sim\Gam(a_\alpha,b_\alpha),\\
 s^{(m)}_{dk}\mid\theta_{mk}&\sim\Bern(\theta_{mk}), &\theta_{mk}&\sim\Betad(a_\theta,b_\theta),\\
 z_{nk}\mid c(n)=c &\sim \N\big(\gamma_{ck}\delta_{ck},\ \tau_{ck}^{-1}\big), &\tau_{ck}&\sim\Gam(a_\tau,b_\tau),\label{eq:z}\\
@@ -193,6 +193,33 @@ q(\lambda_k)&=\Gam(a^\lambda_k,b^\lambda_k), & \new{q(\pi)}&\new{=\Betad(a^\pi,b
 For a masked column ($H_{mk}=0$) the factors $s_{\cdot k},\wh_{\cdot k},\theta_{mk},\alpha_{mk}$ are absent: the masked model has
 $w^{(m)}_{\cdot k}\equiv0$. (In the code: masked $\logit g=-50$, masked $q(\theta)$ held at its prior, and the masked terms
 removed from the ELBO.)
+
+\begin{remark}[Why $H$ has no prior and no $q$]\label{rem:H}
+$H$ is \new{not a latent variable}. It is a \emph{fixed structural constant} of the fitted model, like the number of
+factors $K$ or the assignment of features to views: the likelihood is conditioned on $H$, not generative in it. Hence
+$H$ has no prior $p(H)$ in~\eqref{eq:q}, no variational factor $q(H)$, and no CAVI update --- it never changes during a
+fit. It is instead chosen \emph{between} fits, by the two-stage, evidence-based procedure of Section~\ref{sec:fit}:
+stage~1 fits with $H\equiv1$, $\hat H_{mk}=\mathbb 1\{a_{mk}\ge t\}$ is read off that fit (a point estimate, not a
+distribution), stage~2 freezes $H=\hat H$, and the refinement step compares neighbouring patterns by their stage-2
+ELBO (discrete model selection, as in SLIDE). This is deliberate: giving the view pattern a $\Bern(\pi_h)$ prior and a
+$q(h_{mk})$ updated inside CAVI --- the \emph{view switch} (variant V3, Section~\ref{sec:variants}) --- is a valid model,
+but then the pattern is \emph{learned}, not frozen, and the model can always switch a masked column back on at an
+$O(MK)$ prior cost, which destroys the likelihood-level identification of the split (Conjecture~\ref{conj:growth},
+Lemma~\ref{lem:hid}). The three \emph{switches} that do have a prior and a $q$ --- $s^{(m)}_{dk}$, $\gamma_{ck}$, and (if
+used) $h_{mk}$ --- are summarised against $H$ in Table~\ref{tab:switches}.
+\end{remark}
+
+\begin{table}[h]\centering\footnotesize
+\caption{The on/off structures in the model: which are latent (inferred inside CAVI) and which are fixed.}
+\label{tab:switches}
+\begin{tabular}{@{}lllll@{}}\toprule
+object & gates & latent? & prior & $q$\\\midrule
+$s^{(m)}_{dk}$ element switch & one loading $w^{(m)}_{dk}$ & yes & $\Bern(\theta_{mk})$ & $\Bern(g^{(m)}_{dk})$\\
+$\gamma_{ck}$ cohort switch & one cohort mean $\delta_{ck}$ & yes & $\Bern(\pi)$ & $\Bern(\rho_{ck})$\\
+$h_{mk}$ view switch (V3, not adopted) & one loading column $w^{(m)}_{\cdot k}$ & yes & $\Bern(\pi_h)$ & $\Bern(\E h_{mk})$\\
+\new{$H_{mk}$ frozen view pattern (adopted)} & \new{one loading column $w^{(m)}_{\cdot k}$} & \new{no (fixed)} & \new{---} & \new{---}\\
+\bottomrule\end{tabular}
+\end{table}
 
 \begin{remark}[What changed in $q$, and why]
 CohortFACTM uses $q(\gamma_{ck})\,q(\delta_{ck})$. Then, with $q(\delta)$ at its optimum, the switch's update carries no
