@@ -110,6 +110,76 @@ everything except the factor means re-optimised (hard data, mean over 2 seeds):
 The learned switch behaves exactly like ARD: it switches the needed column back on and pays only a
 prior-sized cost. That is Lemma A's trap one level up, as predicted.
 
+## Improvements (notebook 04) — before vs after on the same scores
+
+The full model, its priors, variational family, ELBO, updates and fitting order are written out in
+`factm/sharedness_model.pdf` (source `sharedness_model.tex`). Changes: multi-start (8 starts, best ELBO) run to a
+relative tolerance; a generalised-CCA start; a two-stage fit (learn pattern → freeze → refit with the corrected
+element spike-and-slab → ELBO refinement); the paired cohort prior with a learned π; a view switch with a slab
+variance calibrated from the stage-1 fit.
+
+**Synthetic, 5 seeds per level**
+
+| level | arm | mean \|corr\| | worst strong factor | pattern cells correct | exact columns |
+|---|---|---|---|---|---|
+| easy | before | 0.921 | 0.856 | 0.900 | 3.0 / 4 |
+| easy | multi-start | **0.996** | **0.991** | **1.000** | **4.0 / 4** |
+| easy | two-stage (final) | 0.995 | 0.989 | **1.000** | **4.0 / 4** |
+| hard | before | 0.855 | 0.878 | 0.950 | 5.2 / 6 |
+| hard | multi-start (PCA start) | **0.869** | **0.912** | **0.983** | **5.6 / 6** |
+| hard | two-stage (final) | 0.842 | 0.910 | 0.975 | 5.4 / 6 |
+
+- **Multi-start is the big gain.** On easy data every seed now recovers the true factors and the exact pattern
+  (spread across seeds ≈ 0). On hard data it fixes the seed where a shared factor was mixed with a private one
+  (0.77 → 0.92) and reaches the truth-start ELBO in **every** seed — the optimiser problem of Q2b is solved.
+- **The gCCA start adds nothing over a multi-started PCA start** (easy: identical; hard: pattern cells 0.975 vs
+  0.983) and loses the deliberately weak factor more often. Keep the PCA start as default.
+- **Two-stage does not improve recovery and is not meant to**: its gain is identification (Q5: the rotation
+  penalty grows like N with a frozen pattern). Refinement flipped no cell at either level.
+- **A calibrated slab fixes the view switch on synthetic data**: 50.0 % / 47.5 % of switches on (truth 50 %),
+  switch AUC 1.00 / 0.99 (easy / hard), versus 96–100 % on with an ARD slab.
+
+**Cohort prior, 3 seeds × true rates 0.1 / 0.3 / 0.6**
+
+| arm | γ AUC easy | γ AUC hard | π error easy | π error hard |
+|---|---|---|---|---|
+| CohortFACTM, π = 0.5 fixed | 0.841 | 0.883 | 0.208* | 0.244 |
+| CohortFACTM, π learned | 0.864 | 0.755 | 0.291 | 0.138 |
+| **paired, π learned (final)** | **0.873** | **0.904** | 0.235 | **0.105** |
+| scale-free paired (variant) | 0.869 | **0.904** | 0.337 | 0.107 |
+| reference cohort (variant) | 0.619 | 0.642 | 0.163 | 0.121 |
+
+\*0.5 happens to be near the average true rate; a fixed π does not learn anything. Learning π *without* pairing
+hurts detection on hard data (0.883 → 0.755); with pairing it is the best or tied everywhere. The scale-free shift
+prior and reference coding were not adopted (no gain; reference coding detects shifts worse).
+
+**Real data, 3 seeds (4 starts each)** — seed stability, since there is no truth
+
+| data | arm | activity matrices agree across seeds | mean factor match | worst factor match |
+|---|---|---|---|---|
+| four-view (M=4) | before | 0.898 | 0.785 | 0.580 |
+| four-view (M=4) | multi-start | **1.000** | **0.999** | **0.999** |
+| four-view (M=4) | two-stage (final) | **1.000** | **1.000** | **1.000** |
+| COVID (M=2) | before | 0.724 | 0.738 | 0.572 |
+| COVID (M=2) | multi-start | 0.962 | 0.762 | 0.582 |
+| COVID (M=2) | two-stage (final) | **0.977** | **0.862** | **0.624** |
+
+- **On the four-view data the final model gives the same factors and the same shared/private pattern from
+  every seed** (worst factor match 0.58 → 1.00). Multi-start also reaches a higher ELBO than the single start on
+  both datasets.
+- **COVID improves but stays partly unstable** (worst factor 0.62): with two views the shared block is large and
+  rotations inside it are not pinned by zeros — the M = 2 limitation seen in Q3.
+
+| data | cohort prior | E[π] | switches on (>0.9) | switches off (<0.1) |
+|---|---|---|---|---|
+| COVID | CohortFACTM, π learned | 0.92 | 100 % | 0 % |
+| COVID | **paired, π learned (final)** | **0.52** | 40 % | **47 %** |
+| four-view | CohortFACTM, π learned | 0.97 | 100 % | 0 % |
+| four-view | **paired, π learned (final)** | 0.89 | 83 % | 0 % |
+
+On COVID the paired prior turns "every cohort shifts on every factor" into a real decision. On the four-view data
+most switches stay on; with six different cancer types that may simply be true.
+
 ## What this means for the two thesis aims
 
 **Aim (b), the shared/private translation, is viable — with one condition.** The split is identified at
@@ -133,26 +203,29 @@ pinned by zeros.
 
 | # | Open point | Why the experiments cannot settle it | Kind of work |
 |---|---|---|---|
-| R1 | `lem:zeros` under CohortFACTM's prior | The proof's block-diagonal step uses N(0, I) priors. Q5 used N(0, I), so it confirms the lemma only in its proven setting. With cohort-specific τ_ck the step fails as written | A proof: replace AAᵀ = I by A D Aᵀ = D′ with diagonal D, D′ |
+| R1 | `lem:zeros` under CohortFACTM's prior | **Proved** (model document, P3): block-diagonality needs only a-priori independent factors (diagonal, cohort-specific covariances), not N(0, I). The earlier claim that it fails under the cohort prior was wrong | Done; write it up |
 | R2 | Learned vs frozen as a theorem | Q5 shows ×1.3–1.5 vs ×3.9–4.3 on two settings; a claim for the thesis needs the order of growth in general | A short proof: the frozen gap is a residual sum of squares (Θ(N)); the learned gap is bounded by the switch prior cost (O(MK)) plus an ARD term |
 | R3 | Where the learned cohort π settles | The derivation (missing Occam term) is correct, but a simple χ² model of the null cohorts predicts 0.68 at a true rate of 0.10, while the fit gives 0.25. The coupling between S_c and γ through the shrunk E[z] is not captured | A careful fixed-point analysis of the mean-field updates |
 | R4 | Identifiability of h next to α | Q4 shows an ARD slab makes h unidentifiable (silencing a column by α → ∞ costs nothing) and a fixed slab restores it. That is an empirical statement about two settings | A lemma: with a learned slab scale the h-likelihood is flat in the limit α → ∞ |
 
-R2 and R4 are short and probably worth doing first. R1 is the one the thesis cannot do without if it
-claims zeros identify anything under the cohort prior. R3 is optional: the paired fix can be adopted
-without it.
+R1 is now proved. R2 (stated with its hypotheses as Conjecture 1 in the model document) is the headline
+result still to prove — it needs a third sample size to separate log N from small powers of N. R4 is a
+one-paragraph lemma plus a pruning argument. R3 is optional: the paired fix can be adopted without it.
+All statements, statuses and proof sketches are in `factm/sharedness_model.pdf`, Section "Proofs needed".
 
 Two conjectures from the skills remain untested: that per-view ARD identifies by joint diagonalisation
 (suggestion 8), and that the two switch layers (cohort and view) can be used together (suggestion 7).
 
 ## What to do next (suggested)
 
-1. Adopt the **paired** cohort factorisation and the **fixed-slab** view switch as the working versions.
-2. Prove **R2** and **R4** (short), then attempt **R1**.
-3. Run the **two-stage** design (learn pattern → freeze → refit) on the four-view data and compare with the
-   one-stage fit, using the Q5 test as the check.
-4. Improve initialisation for the easy-data case where the optimiser misses the truth (Q2b O1), for example
-   several starts ranked by ELBO.
+Done on this branch: paired cohort prior adopted; multi-start and convergence; two-stage design; calibrated
+view switch; `ARD_SS` corrected; R1 proved. Remaining:
+
+1. Use **multi-start with the PCA start** as the default fit everywhere (largest single gain).
+2. Prove **R2** (frozen vs learned growth) and **R4**; run Q5 at a third sample size.
+3. On real data, report the **two-stage frozen pattern** as the shared/private answer, with seed stability.
+4. Treat DNA with a genuine Bernoulli likelihood: the repo's `BernoulliLikelihood` is a stub that reuses the
+   Gaussian updates, so this needs a Jaakkola–Jordan or Pólya–Gamma bound threaded through the Z, W and noise nodes.
 
 ## Caveats
 

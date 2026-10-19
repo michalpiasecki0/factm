@@ -10,7 +10,9 @@ model actually tell? Six simple questions, answered in a fixed order:
 | `01_easy_synthetic.ipynb` | Answers every question on easy synthetic data |
 | `02_harder_synthetic.ipynb` | The same on harder data (noise, unbalanced views, correlated loadings, a weak factor, surplus K) |
 | `03_real_data.ipynb` | COVID (2 views) and the four-view cohort table (4 views): no truth, so stability and identification instead of recovery |
+| `04_improvements.ipynb` | Before vs after: multi-start, gCCA start, two-stage frozen pattern, paired cohort prior, calibrated view switch — same scores as 01–03 |
 | `REPORT.md` | All outcomes in one place, what they mean for the thesis, and where proofs are needed |
+| `../sharedness_model.pdf` | The full model: diagram, priors, q-family, ELBO (changes vs CohortFACTM in red), updates, fitting order, variants, results, proofs |
 
 Each section ends with an **Observed outcome** line picked by a rule in
 `sharedness/experiments.py` (`decide_q*`), so the conclusion cannot be fitted to the plot after the fact.
@@ -24,9 +26,11 @@ Each section ends with an **Observed outcome** line picked by a rule in
 | `sharedness/models.py` | building and fitting every arm; warm and truth starts; the freeze-Z rotation test |
 | `sharedness/metrics.py` | variance share, sharedness entropy, factor matching, pattern AUC, leaks/misses |
 | `sharedness/experiments.py`, `realdata.py` | one runner and one decision rule per question |
+| `sharedness/pipeline.py`, `improvements.py` | gCCA start, multi-start, two-stage fit; the before/after runners of notebook 04 |
 | `tests/test_sharedness_priors.py` | ELBO never decreases, and every new closed-form update is a stationary maximum |
 
-Nothing in `src/` is changed except the `update_z` switch (first commit on this branch).
+Changes in `src/`: the `update_z` switch (first commit on this branch) and the corrected element
+spike-and-slab in `src/w_priors/ARD_SS.py` (log-odds sign, clip, update/ELBO consistency — see the model document).
 
 ## Running
 
@@ -42,6 +46,6 @@ Or open a notebook in VS Code with the `factm` kernel and run all cells. Fits ru
 (`N_WORKERS = cpu_count - 1`). Raw results go to `notebooks_sharedness/results/*.csv`; the repo's
 `.gitignore` excludes CSVs, so they exist only locally — every table is also in the executed notebooks.
 
-Approximate run times on this machine (8 cores): 00 — 15 s, 01 — 35 min, 02 — 35 min, 03 — about an hour.
+Approximate run times on this machine (8 cores): 00 — 15 s, 01 — 35 min, 02 — 35 min, 03 — 45 min, 04 — 1 h 50 min.
 The `_run.py` runner saves after every cell, so a notebook can be watched in VS Code while it runs (do not
 edit it meanwhile).
